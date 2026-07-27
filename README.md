@@ -147,6 +147,8 @@ print(f"Найдено кабелей в каталоге: {len(cables)}")
 ```
 
 ### Использование с контекстным менеджером
+
+Отправляет запросы внутри одной сессии requests.Session
 ```python
 
 from simpleworkernet import WorkerNetClient
