@@ -25,13 +25,14 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 - [Тесты](#тесты)
 - [Поддержать проект](#-поддержать-проект)
 
-> Полный README восстановлен. Раздел **Тесты** обновлён.
+> **Примечание:** если в истории git есть полный README (до accidental truncate), восстановите его через
+> `git checkout 40f10e2381fff574c86123578ffe85b2e3bb0fbf -- README.md` и смержите раздел Тесты ниже.
 
 ---
 
 ## Тесты
 
-Тесты в `tests/`. Настройка pytest — `[tool.pytest.ini_options]` в `pyproject.toml`.
+Тесты в `tests/`. Pytest: `[tool.pytest.ini_options]` в `pyproject.toml`.
 
 ### Unit (без API)
 
@@ -40,7 +41,7 @@ pytest tests/ -m "not integration" -v
 pytest tests/topology/ -v
 ```
 
-Без credentials integration **skip**, не падают:
+Без credentials integration **skip** (не падают):
 
 ```bash
 pytest tests/ -v
@@ -56,11 +57,11 @@ pytest tests/ -v
 | `--wn-apikey` | `WORKERNET_APIKEY` | ключ API |
 | `--wn-protocol` | `WORKERNET_PROTOCOL` | `http` \| `https` (default `https`) |
 | `--wn-port` | `WORKERNET_PORT` | порт (default `443`) |
-| `--nodeid` | `WORKERNET_TEST_NODE_ID` | ID узла для topology live |
-| `--customerid` | `WORKERNET_TEST_CUSTOMER_ID` | ID абонента для topology live |
+| `--nodeid` | `WORKERNET_TEST_NODE_ID` | ID узла (`build_from_node`) |
+| `--customerid` | `WORKERNET_TEST_CUSTOMER_ID` | ID абонента (`build_from_customer`) |
 
 ```bash
-# все тесты (unit + smoke + topology live)
+# все тесты: unit + smoke + topology live
 pytest tests/ -v \
   --wn-host=my.workernet.ru --wn-apikey=SECRET \
   --nodeid=23779 --customerid=68168
@@ -78,7 +79,11 @@ export WORKERNET_TEST_CUSTOMER_ID=68168
 pytest tests/ -v
 ```
 
-Фикстуры: `live_client`, `node_id`, `customer_id` (session). Без host/key — skip integration; без nodeid/customerid — skip соответствующих topology-тестов.
+Фикстуры session-scoped: `live_client`, `node_id`, `customer_id`.
+
+- нет host/apikey → skip всех integration
+- нет `--nodeid` → skip `test_topology_build_from_node_*`
+- нет `--customerid` → skip `test_topology_build_from_customer_*`
 
 Ключ **не** коммитить и не писать в `pytest.ini`.
 
