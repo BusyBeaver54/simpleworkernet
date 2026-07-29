@@ -29,6 +29,7 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 - [Графика](#графика)
 - [Координаты](#координаты)
 - [Графовая топология](#графовая-топология)
+- [Оптические затухания](#оптические-затухания)
 - [Тесты](#тесты)
 - [Поддержать проект](#-поддержать-проект)
 
@@ -44,6 +45,7 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 | **Логирование** | Раздельные уровни console / file, сессионные логи, ротация |
 | **Кэш полей** | LFU / LRU / FIFO, dirty-flag, предзагрузка из моделей |
 | **Топология** | CGraph + FNGraph, фильтры, линейные цепочки, save/load |
+| **Затухания** | Бюджет линии по CGraph: кабель, сплиттер, кросс, сварка; JSON-профили |
 | **Координаты** | WGS84 ↔ local ENU / UTM / Mercator, пакетная обработка |
 | **Графика** | SVG → PNG (Wand / Cairo / Inkscape / WeasyPrint) |
 | **Cleanup CLI** | `cleanup-simpleworkernet` — логи, кэш, конфиг |
@@ -94,7 +96,14 @@ src/simpleworkernet/
 │       ├── merge.py         # merge_cgraphs, merge_fngraphs
 │       ├── linear.py        # LinearPathFinder
 │       ├── graphs/          # BaseGraph, CGraph, FNGraph
-│       └── builders/        # GraphBuilder + handlers
+│       ├── builders/        # GraphBuilder + handlers
+│       └── attenuation/     # расчёт оптических затуханий
+│           ├── calculator.py    # Attenuation
+│           ├── catalog.py       # AttenuationCatalog
+│           ├── models.py        # PathReport, AttenuationSegment
+│           ├── length.py        # длина кабеля
+│           ├── template.py      # генерация JSON из live API
+│           └── defaults.json    # типовые α и сплиттеры
 │
 └── scripts/
     └── uninstall.py         # cleanup
@@ -113,6 +122,10 @@ from simpleworkernet import (
     save_svg, load_svg, svg_to_png,
     cleanup,
 )
+
+from simpleworkernet.utils.topology import (
+    Attenuation, AttenuationCatalog, PathReport, DataCache,
+)
 ```
 
 ---
@@ -127,7 +140,7 @@ pip install git+https://github.com/busy4beaver/simpleworkernet.git
 
 | Доп. возможность | Пакет |
 |------------------|-------|
-| Графовая топология | `python-igraph` |
+| Графовая топология и затухания | `python-igraph` |
 | UTM-проекция координат | `pyproj` |
 | SVG → PNG (рекомендуется) | `Wand` (+ ImageMagick) |
 | Альтернативы PNG | `cairosvg`, `weasyprint` |
@@ -620,21 +633,13 @@ sw, ne = arr.bounds()
 
 ```text
 utils/topology/
-├── topology.py      # фасад: build_from_*, get_*, save/load
-├── cache.py         # DataCache — инстанс, не синглтон
-├── keys.py          # ObjKey, Interface
-├── models.py        # CGraphVertex/Edge, FNGraphVertex/Edge
-├── constants.py     # TYPE_*, DEVICE/SIDE/TERMINAL_TYPES
-├── context.py       # BuildContext (фильтры, очередь BFS)
-├── merge.py         # объединение пересекающихся компонент
-├── linear.py        # линейная цепочка от абонента/порта
-├── graphs/
-│   ├── base.py      # composition над igraph.Graph
-│   ├── cgraph.py
-│   └── fngraph.py
-└── builders/
-    ├── base.py      # GraphBuilder
-    └── handlers.py  # Terminal / Cross / Fiber / SplitterCwdm
+├── topology.py
+├── cache.py
+├── keys.py / models.py / constants.py / context.py
+├── merge.py / linear.py
+├── graphs/          # CGraph, FNGraph
+├── builders/        # handlers
+└── attenuation/     # см. раздел «Оптические затухания»
 ```
 
 Импорт:
@@ -643,23 +648,32 @@ utils/topology/
 from simpleworkernet.utils.topology import (
     Topology, CGraph, FNGraph, DataCache,
     ObjKey, Interface,
+    Attenuation, AttenuationCatalog, PathReport,
     merge_cgraphs, merge_fngraphs,
 )
-# или с топ-уровня
 from simpleworkernet import Topology, CGraph, FNGraph
 ```
 
 ### DataCache
 
-Кэш объектов и коммутаций API — **экземпляр**, можно шарить между несколькими Topology:
+Кэш объектов и коммутаций API — **экземпляр**, можно шарить между несколькими Topology.
+
+Дополнительно для затуханий:
+
+| Метод / хранилище | Назначение |
+|-------------------|------------|
+| `get_inventory` / `get_inventory_catalog_item` | ТМЦ сплиттера → catalog_id / имя |
+| `preload_splitter_inventory` | массовая подгрузка |
+| `get_fiber_length_m` / `set_fiber_length_m` | кэш длин |
+| `get_geo_length` | `Fiber.get_geo_length` |
+| `get_cable_catalog` | `catalog_cables_get` |
 
 ```python
 from simpleworkernet.utils.topology import Topology, DataCache
 
 cache = DataCache()
-topo1 = Topology(client, cache=cache)
-topo2 = Topology(client, cache=cache)  # общий кэш
-cache.clear()
+topo = Topology(client, cache=cache)
+cache.preload_splitter_inventory(client)
 ```
 
 Не путать с глобальным `simpleworkernet.cache` (имена полей SmartData).
@@ -673,11 +687,9 @@ cache.clear()
 | `build_from_cross(object_id, port=None, side=None, …)` | Кросс (UUID) |
 | `build_from_splitter(object_id, port=None, side=None, …)` | Сплиттер |
 | `build_from_cwdm(object_id, port=None, side=None, …)` | CWDM |
-| `build_from_fiber(object_id, port, side=None, …)` | Волокно (`object_id` = кабель, `port` = № волокна) |
+| `build_from_fiber(object_id, port, side=None, …)` | Волокно |
 | `build_from_cable(object_id, …)` | Все волокна кабеля |
-| `build_from_node(object_id, …)` | Узел → FNGraph + CGraph по объектам в узлах |
-
-Общие фильтры всех `build_from_*`:
+| `build_from_node(object_id, …)` | Узел |
 
 | Параметр | Поведение |
 |----------|-----------|
@@ -694,23 +706,22 @@ topo = Topology(client)
 
 topo.build_from_device("olt", 12345, port=1)
 topo.build_from_cross("98d9d368-…", port=7)
-topo.build_from_splitter(35196)  # все интерфейсы → merge
+topo.build_from_splitter(35196)
 topo.build_from_fiber(23682, port=1, side=1)
 topo.build_from_node(23779, excluded_nodes=[23780])
-topo.build_from_cable(23682)
 ```
 
 ### Получение данных
 
 ```python
-topo.get_customers()   # List[int]
+topo.get_customers()
 topo.get_nodes()
 topo.get_cables()
 topo.get_fibers()
 topo.get_devices()
 topo.get_splitters()
 topo.get_cwdms()
-topo.get_crosses()     # List[str] UUID
+topo.get_crosses()
 
 topo.customer(68168)
 topo.node(23779)
@@ -718,7 +729,6 @@ topo.cable(23682)
 topo.fiber(23682)
 topo.device(12345)
 topo.splitter(35196)
-topo.cwdm(12345)
 topo.cross("98d9d368-…")
 
 topo.get_finish_by_node(23779)
@@ -727,7 +737,7 @@ topo.get_finish_by_object("customer", 68168)
 
 ### Линейная цепочка
 
-`topology_from_commutation` → новый объект Topology с одним линейным CGraph.
+`topology_from_commutation` → Topology с одним линейным CGraph.
 
 ```python
 linear = topo.topology_from_commutation("customer", customer_id)
@@ -750,7 +760,7 @@ linear = topo.topology_from_commutation(
 | Абонент с несколькими коммутациями | нужен `first_object_*` |
 | Без `first_object` | поиск OLT / switch |
 | Ветвление | shortest path до `first_object` |
-| CWDM на пути | не поддерживается |
+| CWDM на пути | **не поддерживается** |
 
 ### Сохранение / загрузка
 
@@ -759,14 +769,9 @@ topo.save_to_file("topology.pkl")
 loaded = Topology.load_from_file("topology.pkl")
 ```
 
-Сохраняются `cgraphs`, `fngraph`, `DataCache`, параметры клиента.
-
 ### Обход вершин и рёбер
 
 ```python
-topo.cgraphs   # List[CGraph]
-topo.fngraph   # Optional[FNGraph]
-
 for v in topo.cgraphs[0].get_vertices():
     print(v.obj_type, v.obj_id, v.side, v.port)
 
@@ -774,39 +779,277 @@ for e in topo.cgraphs[0].get_edges():
     print(e.source, e.target, e.connect_id, e.is_internal)
 ```
 
-Каждый CGraph связный; несвязные результаты в список не добавляются.
-
-### Полный пример
-
-```python
-from simpleworkernet import WorkerNetClient
-from simpleworkernet.utils.topology import Topology, DataCache
-
-client = WorkerNetClient("my.workernet.ru", "key")
-cache = DataCache()
-topo = Topology(client, cache=cache)
-
-topo.build_from_cross("98d9d368-43e9-4513-9ec7-4e076eea2bda", port=7)
-customers = topo.get_customers()
-print(f"Абонентов: {len(customers)}")
-
-linear = topo.topology_from_commutation("customer", customers[0])
-print(f"Цепочка: {linear.cgraphs[0].vcount()} вершин")
-print("Устройства:", linear.get_devices())
-
-topo.save_to_file("my_topo.pkl")
-```
-
 ### Особенности реализации
 
 | Идея | Деталь |
 |------|--------|
 | Composition | CGraph / FNGraph оборачивают `igraph.Graph` |
-| Handlers | Правила terminal / cross / fiber / splitter+CWDM |
-| BuildContext | Фильтры, очередь BFS, finish-данные |
-| DataCache | Инстанс, шаринг между Topology |
-| Merge | Пересекающиеся компоненты объединяются |
-| Linear path | External-ребро важнее internal; иначе shortest path |
+| Handlers | terminal / cross / fiber / splitter+CWDM |
+| BuildContext | фильтры, BFS, finish-данные |
+| DataCache | инстанс + inventory / длины |
+| Linear path | external важнее internal |
+
+---
+
+## Оптические затухания
+
+Модуль `simpleworkernet.utils.topology.attenuation` считает **бюджет оптического тракта** по уже построенному **CGraph**.
+
+Важные свойства:
+
+- расчёт **только по запросу** — не замедляет `build_from_*`;
+- CWDM **не поддерживается** (как и в линейной цепочке);
+- затухание сплиттера **симметрично** (OLT→клиент и клиент→OLT — одни и те же dB на out-порт);
+- профили задаются JSON / кодом / defaults; есть **force**-переопределения.
+
+### Установка зависимости
+
+Тот же `python-igraph`, что и для топологии.
+
+### Быстрый старт
+
+```python
+from simpleworkernet import WorkerNetClient
+from simpleworkernet.utils.topology import (
+    Topology, DataCache,
+    Attenuation, AttenuationCatalog,
+)
+
+client = WorkerNetClient("my.workernet.ru", "key")
+cache = DataCache()
+topo = Topology(client, cache=cache)
+
+topo.build_from_customer(68168)
+linear = topo.topology_from_commutation("customer", 68168)
+cg = linear.cgraphs[0]
+
+cat = AttenuationCatalog.with_defaults()
+# или: AttenuationCatalog.from_json("my_attenuation.json")
+
+att = Attenuation(cg, catalog=cat, wavelength=1550, cache=cache, client=client)
+
+report = att.along_linear()                 # по линейной цепочке
+# report = att.olt_to_customer(68168)       # shortest path OLT→абонент
+# report = att.customer_to_olt(68168)       # upstream, те же dB
+
+print(report.total_db)
+print(report.to_table())
+print(report.by_kind())   # {'fiber': …, 'splitter': …, 'splice': …}
+```
+
+### Каталог профилей
+
+```python
+from simpleworkernet.utils.topology import AttenuationCatalog
+
+cat = AttenuationCatalog.with_defaults()
+
+# кабель по id типа из WorkerNet
+cat.set_cable(12, name="ОКЛ-…", db_per_km={1310: 0.36, 1550: 0.21})
+
+# сплиттер 5/95 по ключу ratio
+cat.set_splitter_by_ratio("1x2_5/95", ports={1: 13.7, 2: 0.8}, wavelength_nm=1550)
+
+# конкретный экземпляр в топологии
+cat.set_splitter_instance(35196, ports={1: 13.5, 2: 0.9})
+
+# по inventory catalog_id
+cat.set_splitter_by_catalog(1042, ports={1: 13.7, 2: 0.8}, ratio="5/95")
+
+# принудительно
+cat.force_fiber(23682, 0.40)                 # dB/km
+cat.force_splitter_port(35196, port=2, db=0.7)
+cat.force_object("cross", "uuid-…", 0.15)
+cat.force_edge(connect_id=12345, db=0.5)
+
+cat.save("my_attenuation.json")
+cat2 = AttenuationCatalog.from_json("my_attenuation.json")
+```
+
+**Приоритет (сильный → слабый):**
+
+1. `force_*`
+2. профиль экземпляра / catalog_id / ratio
+3. defaults (`defaults.json`: G.652, типовые 1×2 5/95, 50/50, 1×8, …)
+
+Для неизвестного сплиттера — оценка `10·log10(N) + excess` (`source="estimated"`).
+
+### Длина кабеля
+
+Цепочка источников:
+
+```text
+opticalen2 (по волокну)
+  → opticalen (по кабелю)
+  → сумма path (GeoPoint) × geo_slack_k
+  → Fiber.get_geo_length (через DataCache)
+```
+
+| Источник | `length_source` |
+|----------|-----------------|
+| `opticalen2` | `opticalen2` |
+| `opticalen` | `opticalen` |
+| гео-маршрут | `geo` |
+| API geo length | `geo_api` |
+| нет данных | `none` (dB волокна = 0, в `missing`) |
+
+`geo_slack_k` (по умолчанию `1.03`) — в `defaults` каталога.
+
+### Что учитывается на пути
+
+| Элемент CGraph | kind | Как считается |
+|----------------|------|----------------|
+| Кабель (internal side1↔side2) | `fiber` | α(λ)·L_км |
+| Сплиттер (internal IN↔OUT) | `splitter` | dB **out-порта** (side=2) |
+| Кросс (internal side1↔side2) | `adapter` | default / тип адаптера |
+| Внешний стык с волокном | `splice` | `splice_db` |
+| Прочий внешний стык | `connector` | `connector_db` |
+| `force_edge` | `force` | фиксированное dB |
+
+**Сплиттер (как в handlers):** side **1 = IN**, side **2 = OUT**; internal — полный бипартный граф портов. Затухание берётся с OUT-порта и **не зависит от направления** обхода.
+
+**CWDM:** на пути не моделируется (линейный обход тоже запрещает CWDM).
+
+### Удобные методы Attenuation
+
+| Метод | Смысл |
+|-------|--------|
+| `path(src, dst)` | shortest path между вершинами / Interface / `"olt:1"` |
+| `along(vpath)` | явный список индексов вершин |
+| `along_linear()` | обход линейного CGraph (после `topology_from_commutation`) |
+| `along_linear(reverse=True)` | client → OLT |
+| `olt_to_customer(id)` | OLT → абонент, downstream |
+| `customer_to_olt(id)` | upstream, те же сегменты в обратном порядке |
+| `olt_to_splitter_out(id, port)` | до OUT-порта сплиттера |
+| `olt_to_splitter_in(id)` | до IN |
+| `olt_to_cross(uuid, port=…)` | до кросса |
+| `cross_to_customer(uuid, cid)` | кросс → абонент |
+| `first_in_node(node_id)` | от OLT (или `from_ref`) до первого iface в узле |
+| `from_cross_to_node(uuid, node_id)` | кросс → первая коммутация в сооружении |
+| `between(type, id, to_type=…, to_id=…)` | произвольная пара |
+| `budget_summary()` | OLT → каждый абонент в графе |
+| `worst_customer()` | максимальный total_db |
+| `path_db(…)` | только число dB |
+| `describe_interface(ref)` | attrs вершины |
+
+### PathReport
+
+```python
+report.total_db
+report.length_m          # сумма длин fiber-сегментов
+report.fiber_db
+report.splitter_db
+report.passive_db        # splice + adapter + connector
+report.by_kind()
+report.segments          # List[AttenuationSegment]
+report.warnings
+report.missing           # нет длины / estimated splitter
+report.to_table()        # текстовая таблица
+report.to_dict()         # JSON-совместимый dict
+```
+
+Пример таблицы:
+
+```text
+Path: olt:1 s1p2 → customer:68168 s1p0  [downstream]  λ=1550 nm
+Total: 18.420 dB  (fiber=2.100, splitter=15.700, passive=0.620)  L=9500.0 m
+------------------------------------------------------------------------
+  # kind              dB      L,m  description
+  1 fiber          2.100   9500.0  fiber:23682 L=9500.0m α=0.220 dB/km (opticalen2)
+  2 splice         0.050        -  splice at fiber joint
+  3 splitter      13.700        -  splitter:10 out port=1 side=2 (1x2) [downstream]
+  …
+```
+
+### Шаблон JSON из live WorkerNet
+
+```python
+from simpleworkernet.utils.topology.attenuation.template import generate_template
+
+cat = generate_template(
+    client,
+    cache=cache,
+    path="attenuation_template.json",
+    fill_defaults=False,   # True — подставить G.652 в пустые db_per_km
+)
+print(cat.unset_profiles())  # что ещё нужно заполнить вручную
+```
+
+Шаблон заполняет:
+
+- `cables` из `Fiber.catalog_cables_get` (слоты `db_per_km`: null);
+- `splitters.by_catalog_id` / `by_topology` из `Splitter.get` + inventory (слоты `ports`: {}).
+
+Пользователь дописывает dB и сохраняет файл для повторного `from_json`.
+
+Фрагмент структуры:
+
+```json
+{
+  "wavelengths_nm": [1310, 1490, 1550],
+  "defaults": {
+    "fiber_db_per_km": {"1310": 0.35, "1550": 0.22},
+    "splice_db": 0.05,
+    "connector_db": 0.3,
+    "adapter_db": 0.2,
+    "geo_slack_k": 1.03,
+    "splitter_excess_db": 0.5
+  },
+  "cables": {
+    "12": {"name": "…", "db_per_km": {"1550": 0.21}}
+  },
+  "splitters": {
+    "by_catalog_id": {},
+    "by_ratio": {
+      "1x2_5/95": {"ports": {"1": 13.7, "2": 0.8}, "wavelength_nm": 1550}
+    },
+    "by_topology": {}
+  },
+  "cross_adapters": {"default": 0.2},
+  "force": {"fibers": {}, "splitters": {}, "objects": {}, "edges": {}}
+}
+```
+
+### Полный сценарий: бюджет абонента
+
+```python
+from simpleworkernet import WorkerNetClient
+from simpleworkernet.utils.topology import (
+    Topology, DataCache, Attenuation, AttenuationCatalog,
+)
+from simpleworkernet.utils.topology.attenuation.template import generate_template
+
+client = WorkerNetClient("my.workernet.ru", "key")
+cache = DataCache()
+
+# один раз: выгрузить шаблон и заполнить ports / db_per_km
+# generate_template(client, cache=cache, path="att.json")
+
+cat = AttenuationCatalog.from_json("att.json")  # или with_defaults()
+
+topo = Topology(client, cache=cache)
+topo.build_from_node(23779)
+
+for cid in topo.get_customers()[:20]:
+    try:
+        lin = topo.topology_from_commutation("customer", cid)
+    except ValueError:
+        continue
+    att = Attenuation(
+        lin.cgraphs[0], catalog=cat, wavelength=1550,
+        cache=cache, client=client,
+    )
+    r = att.along_linear()
+    print(f"customer {cid}: {r.total_db:.2f} dB  L={r.length_m:.0f} m")
+    if r.missing:
+        print("  missing:", r.missing)
+
+worst = att.worst_customer()  # на полном графе, не на linear
+```
+
+### Связь с длиной волны
+
+`Attenuation(..., wavelength=1310|1490|1550)` выбирает строку из `db_per_km` и из профилей сплиттера (если задан `wavelength_nm`). При отсутствии точного ключа берётся **ближайшая** λ из таблицы.
 
 ---
 
@@ -818,8 +1061,8 @@ topo.save_to_file("my_topo.pkl")
 
 ```bash
 pip install -r requirements-dev.txt
-pip install python-igraph          # topology
-pip install pyproj                 # UTM в тестах координат (опционально)
+pip install python-igraph
+pip install pyproj                 # опционально
 ```
 
 ### Структура
@@ -827,7 +1070,7 @@ pip install pyproj                 # UTM в тестах координат (о�
 | Путь | Тип | Сеть |
 |------|-----|------|
 | `tests/test_*.py` | unit: SmartData, primitives, operators, exceptions, coordinates | нет |
-| `tests/topology/` | unit: CGraph, FNGraph, merge, linear, handlers, DataCache | нет |
+| `tests/topology/` | unit: CGraph, FNGraph, merge, linear, handlers, DataCache, **attenuation** | нет |
 | `tests/integration/` | live: smoke API, topology | **да** |
 
 Маркер `@pytest.mark.integration` — тесты против реального WorkerNet. Без credentials они **skip**, а не падают.
@@ -835,16 +1078,10 @@ pip install pyproj                 # UTM в тестах координат (о�
 ### Unit (без API)
 
 ```bash
-# всё, кроме live
 pytest tests/ -m "not integration" -v
-
-# только topology
 pytest tests/topology/ -v
-
-# только core (SmartData, primitives, координаты, …)
+pytest tests/topology/test_attenuation.py tests/topology/test_attenuation_splitter.py -v
 pytest tests/ --ignore=tests/topology --ignore=tests/integration -v
-
-# весь suite offline (integration skip)
 pytest tests/ -v
 ```
 
@@ -862,32 +1099,26 @@ pytest tests/ -v
 | `--customerid` | `WORKERNET_TEST_CUSTOMER_ID` | ID абонента для `build_from_customer` |
 
 ```bash
-# все тесты: unit + smoke + topology live
 pytest tests/ -v \
   --wn-host=my.workernet.ru --wn-apikey=SECRET \
   --nodeid=23779 --customerid=68168
 
-# только integration
 pytest tests/integration/ -v \
   --wn-host=my.workernet.ru --wn-apikey=SECRET \
   --nodeid=23779 --customerid=68168
 
-# через env
 export WORKERNET_HOST=my.workernet.ru
 export WORKERNET_APIKEY=SECRET
 export WORKERNET_TEST_NODE_ID=23779
 export WORKERNET_TEST_CUSTOMER_ID=68168
 pytest tests/ -v
-
-# только smoke API
-pytest tests/integration/test_api_smoke.py -v --wn-host=... --wn-apikey=...
 ```
 
 Фикстуры (session-scoped):
 
 | Фикстура | Назначение |
 |----------|------------|
-| `live_client` | `WorkerNetClient`, закрывает сессию после прогона |
+| `live_client` | `WorkerNetClient` |
 | `node_id` | из `--nodeid` / env |
 | `customer_id` | из `--customerid` / env |
 | `wn_credentials` | dict host/apikey/protocol/port |
@@ -903,10 +1134,10 @@ pytest tests/integration/test_api_smoke.py -v --wn-host=... --wn-apikey=...
 ### Полезные команды
 
 ```bash
-pytest tests/ -m "not integration" -q          # быстро, offline
-pytest tests/ -k "smartdata or topology" -v    # по имени
-pytest tests/ --cov=simpleworkernet            # coverage (pytest-cov)
-pytest tests/test_coordinates.py -v            # только координаты
+pytest tests/ -m "not integration" -q
+pytest tests/ -k "smartdata or topology or attenuation" -v
+pytest tests/ --cov=simpleworkernet
+pytest tests/test_coordinates.py -v
 ```
 
 ---
