@@ -2,6 +2,7 @@
 
 from simpleworkernet.models.primitives import (
     GeoPoint,
+    GeoPointArray,
     vFlag,
     vINN,
     vKPP,
@@ -53,7 +54,13 @@ def test_geopoint_distance():
     a = GeoPoint(55.75, 37.62)
     b = GeoPoint(55.76, 37.63)
     d = a.distance_to(b)
-    assert 0 < d < 5  # ~1–2 км в центре Москвы
+    assert 0 < d < 5
+
+
+def test_geopoint_array_basic():
+    arr = GeoPointArray([(55.75, 37.62), "55.76,37.63"])
+    assert len(arr) == 2
+    assert isinstance(arr[0], GeoPoint)
 
 
 def test_phone():

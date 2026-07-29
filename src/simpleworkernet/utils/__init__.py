@@ -34,10 +34,7 @@ from .graphics import (
     svg_to_png,
 )
 
-# Новый модульный пакет topology (предпочтительный импорт)
 from .topology import CGraph, FNGraph, Topology
-
-from .coordinates import geo_to_xy, geo_to_xyz, xy_to_geo
 
 __all__ = [
     "api_method",
@@ -65,7 +62,4 @@ __all__ = [
     "CGraph",
     "FNGraph",
     "Topology",
-    "geo_to_xy",
-    "geo_to_xyz",
-    "xy_to_geo",
 ]
