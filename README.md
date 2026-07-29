@@ -29,6 +29,7 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 - [Графика (SVG/PNG)](#графика-svgpng)
 - [Координаты](#координаты)
 - [Графовая топология (Topology)](#графовая-топология-topology)
+- [Тесты](#тесты)
 - [Поддержать проект](#-поддержать-проект)
 
 ---
@@ -129,10 +130,11 @@ pip install git+https://github.com/busy4beaver/simpleworkernet.git
 | Графовая топология | `python-igraph` |
 | SVG → PNG (рекомендуется) | `Wand` (+ ImageMagick) |
 | Альтернативы PNG | `cairosvg`, `weasyprint` |
-| Dev / тесты | см. `requirements-dev.txt` |
+| Dev / тесты | `pytest`, см. `requirements-dev.txt` |
 
 ```bash
 pip install python-igraph Wand
+pip install -r requirements-dev.txt   # pytest и др. для разработки
 ```
 
 ---
@@ -760,6 +762,98 @@ topo.save_to_file("my_topo.pkl")
 | DataCache | Инстанс, шаринг между Topology |
 | Merge | Пересекающиеся компоненты объединяются |
 | Linear path | External-ребро важнее internal; иначе shortest path |
+
+---
+
+## Тесты
+
+Тесты лежат в `tests/`. Настройка pytest — в `pyproject.toml` (`[tool.pytest.ini_options]`).
+
+### Зависимости
+
+```bash
+pip install -r requirements-dev.txt
+pip install python-igraph          # для topology
+# опционально для UTM-координат:
+# pip install pyproj
+```
+
+### Структура
+
+| Путь | Тип | Сеть |
+|------|-----|------|
+| `tests/test_*.py` | unit: SmartData, primitives, operators, exceptions, coordinates | нет |
+| `tests/topology/` | unit: CGraph, FNGraph, merge, linear, handlers, DataCache | нет |
+| `tests/integration/` | live: smoke API, topology | **да** |
+
+Маркер `@pytest.mark.integration` — тесты против реального WorkerNet.
+
+### Unit (без API)
+
+```bash
+# всё, кроме live
+pytest tests/ -m "not integration" -v
+
+# только topology
+pytest tests/topology/ -v
+
+# только core (SmartData, primitives, …)
+pytest tests/ --ignore=tests/topology --ignore=tests/integration -v
+```
+
+Без credentials integration-тесты **skip**, а не падают — можно запускать весь suite:
+
+```bash
+pytest tests/ -v
+```
+
+### Integration (реальный API)
+
+Учётные данные передаются через CLI или переменные окружения. Приоритет: **CLI > env**.
+
+| CLI | Env | Описание |
+|-----|-----|----------|
+| `--wn-host` | `WORKERNET_HOST` | хост API |
+| `--wn-apikey` | `WORKERNET_APIKEY` | ключ API |
+| `--wn-protocol` | `WORKERNET_PROTOCOL` | `http` \| `https` (по умолчанию `https`) |
+| `--wn-port` | `WORKERNET_PORT` | порт (по умолчанию `443`) |
+
+Дополнительно для topology-live:
+
+| Env | Описание |
+|-----|----------|
+| `WORKERNET_TEST_NODE_ID` | ID узла для `build_from_node` |
+| `WORKERNET_TEST_CUSTOMER_ID` | ID абонента для `build_from_customer` |
+
+```bash
+# CLI
+pytest tests/integration/ -v \
+  --wn-host=my.workernet.ru --wn-apikey=SECRET
+
+# env
+export WORKERNET_HOST=my.workernet.ru
+export WORKERNET_APIKEY=SECRET
+pytest tests/integration/ -v
+
+# topology live
+export WORKERNET_TEST_NODE_ID=23779
+export WORKERNET_TEST_CUSTOMER_ID=68168
+pytest tests/integration/test_topology_live.py -v
+
+# только smoke API
+pytest tests/integration/test_api_smoke.py -v --wn-host=... --wn-apikey=...
+```
+
+Фикстура `live_client` (session-scoped) создаёт `WorkerNetClient` и закрывает сессию после прогона. Ключ **не** коммитьте в репозиторий и не пишите в `pytest.ini`.
+
+### Полезные команды
+
+```bash
+pytest tests/ -m "not integration" -q          # быстро, offline
+pytest tests/integration/ -v --wn-host=...     # live
+pytest tests/ -k "smartdata or topology" -v    # по имени
+pytest tests/ --cov=simpleworkernet            # coverage (pytest-cov)
+```
 
 ---
 
