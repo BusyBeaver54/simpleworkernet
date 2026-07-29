@@ -2,6 +2,7 @@
 
 import pytest
 
+from simpleworkernet import GeoPoint
 from simpleworkernet.utils.coordinates import (
     HAS_PYPROJ,
     auto_center,
@@ -26,21 +27,21 @@ def test_lat_lon_to_xy_mercator():
 
 
 def test_geo_to_xy_single_mercator():
-    xy = geo_to_xy("55.75, 37.62", projection="mercator")
+    xy = geo_to_xy(GeoPoint(55.75, 37.62), projection="mercator")
     assert len(xy) == 2
     assert all(isinstance(v, float) for v in xy)
 
 
 def test_geo_to_xy_list_mercator():
-    pts = geo_to_xy([(55.75, 37.62), (55.76, 37.63)], projection="mercator")
+    pts = geo_to_xy([GeoPoint(55.75, 37.62), GeoPoint(55.76, 37.63)], projection="mercator")
     assert len(pts) == 2
     assert len(pts[0]) == 2
 
 
 def test_geo_to_xy_centered_mercator():
     xy = geo_to_xy(
-        (55.76, 37.63),
-        center=(55.75, 37.62),
+        GeoPoint(55.76, 37.63),
+        center=GeoPoint(55.75, 37.62),
         projection="mercator",
     )
     assert len(xy) == 2
@@ -50,7 +51,7 @@ def test_geo_to_xy_centered_mercator():
 
 
 def test_geo_to_xyz_mercator():
-    xyz = geo_to_xyz((55.75, 37.62, 10.0), projection="mercator")
+    xyz = geo_to_xyz("55.75, 37.62, 10.0", projection="mercator")
     assert len(xyz) == 3
     assert abs(xyz[2] - 10.0) < 1e-6
 
