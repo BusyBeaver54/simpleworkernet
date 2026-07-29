@@ -46,3 +46,16 @@ include = ["simpleworkernet*"]
 
 [tool.setuptools.package-data]
 simpleworkernet = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: тесты против реального API WorkerNet",
+]
+# По умолчанию integration не исключаем — они сами skip без credentials.
+# Для строго unit-only:
+#   pytest -m "not integration"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
