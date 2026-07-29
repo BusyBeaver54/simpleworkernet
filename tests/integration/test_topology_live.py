@@ -3,14 +3,17 @@ Live-тесты топологии.
 
 Требуют данных в ERP. При отсутствии подходящих объектов — skip.
 
-Опционально можно сузить через env:
-    WORKERNET_TEST_NODE_ID=123
-    WORKERNET_TEST_CUSTOMER_ID=456
+Параметры (CLI > env):
+    --nodeid / WORKERNET_TEST_NODE_ID
+    --customerid / WORKERNET_TEST_CUSTOMER_ID
+
+Полный live-прогон:
+    pytest tests/ -v \\
+        --wn-host=my.workernet.ru --wn-apikey=SECRET \\
+        --nodeid=23779 --customerid=68168
 """
 
 from __future__ import annotations
-
-import os
 
 import pytest
 
@@ -24,21 +27,18 @@ def topology(live_client):
     return Topology(live_client, cache=DataCache())
 
 
-def test_topology_build_from_node_if_configured(topology):
-    node_id = os.environ.get("WORKERNET_TEST_NODE_ID")
-    if not node_id:
-        pytest.skip("Задайте WORKERNET_TEST_NODE_ID для live topology-теста")
+def test_topology_build_from_node_if_configured(topology, node_id):
+    if node_id is None:
+        pytest.skip("Задайте --nodeid или WORKERNET_TEST_NODE_ID")
 
-    topology.build_from_node(int(node_id))
-    # FNGraph мог построиться
+    topology.build_from_node(node_id)
     assert topology.fngraph is not None or topology.cgraphs is not None
 
 
-def test_topology_build_from_customer_if_configured(topology):
-    customer_id = os.environ.get("WORKERNET_TEST_CUSTOMER_ID")
-    if not customer_id:
-        pytest.skip("Задайте WORKERNET_TEST_CUSTOMER_ID для live topology-теста")
+def test_topology_build_from_customer_if_configured(topology, customer_id):
+    if customer_id is None:
+        pytest.skip("Задайте --customerid или WORKERNET_TEST_CUSTOMER_ID")
 
-    topology.build_from_customer(int(customer_id))
+    topology.build_from_customer(customer_id)
     customers = topology.get_customers()
-    assert int(customer_id) in customers or len(topology.cgraphs) >= 0
+    assert customer_id in customers or len(topology.cgraphs) >= 0

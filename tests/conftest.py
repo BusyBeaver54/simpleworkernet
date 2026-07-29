@@ -35,6 +35,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=None,
         help="Порт (или env WORKERNET_PORT, default 443)",
     )
+    group.addoption(
+        "--nodeid",
+        action="store",
+        default=None,
+        help="ID узла для live topology (или env WORKERNET_TEST_NODE_ID)",
+    )
+    group.addoption(
+        "--customerid",
+        action="store",
+        default=None,
+        help="ID абонента для live topology (или env WORKERNET_TEST_CUSTOMER_ID)",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -46,8 +58,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def _opt_or_env(config: pytest.Config, opt: str, env: str) -> Optional[str]:
     value = config.getoption(opt)
-    if value:
-        return str(value)
+    if value is not None and str(value).strip() != "":
+        return str(value).strip()
     return os.environ.get(env) or None
 
 
@@ -104,6 +116,24 @@ def live_client(wn_credentials):
     client.session()
     yield client
     client.closeSession()
+
+
+@pytest.fixture(scope="session")
+def node_id(pytestconfig: pytest.Config) -> Optional[int]:
+    """ID узла для live topology: --nodeid или WORKERNET_TEST_NODE_ID."""
+    raw = _opt_or_env(pytestconfig, "--nodeid", "WORKERNET_TEST_NODE_ID")
+    if raw is None:
+        return None
+    return int(raw)
+
+
+@pytest.fixture(scope="session")
+def customer_id(pytestconfig: pytest.Config) -> Optional[int]:
+    """ID абонента для live topology: --customerid или WORKERNET_TEST_CUSTOMER_ID."""
+    raw = _opt_or_env(pytestconfig, "--customerid", "WORKERNET_TEST_CUSTOMER_ID")
+    if raw is None:
+        return None
+    return int(raw)
 
 
 @pytest.fixture
