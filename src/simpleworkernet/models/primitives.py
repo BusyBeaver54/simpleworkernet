@@ -6,7 +6,7 @@ import html
 import math
 from urllib.parse import unquote_plus
 from enum import IntFlag
-from typing import Any, Union, List, Tuple, Optional
+from typing import Any, Union, List, Tuple, Optional, Sequence
 
 from .base import BaseModel, smart_model
 from ..core.logger import log
@@ -120,6 +120,7 @@ class GeoPoint(BaseModel):
     - GeoPoint(lat=55.75, lon=37.62)
     - GeoPoint(55.75, 37.62)
     - GeoPoint([55.75, 37.62])
+    - GeoPoint((55.75, 37.62))
     - GeoPoint("55.75,37.62")
     
     Пример:
@@ -150,38 +151,40 @@ class GeoPoint(BaseModel):
         if len(args) == 1:
             arg = args[0]
             
-            # Список или кортеж [lat, lon]
-            if isinstance(arg, (list, tuple)) and len(arg) == 2:
-                lat, lon = arg
+            # Список или кортеж [lat, lon] / (lat, lon)
+            if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes)) and len(arg) == 2:
+                lat, lon = arg[0], arg[1]
                 super().__init__(lat=float(lat), lon=float(lon))
+                self._validate()
                 return
             
             # Строка "lat,lon"
-            elif isinstance(arg, str):
+            if isinstance(arg, str):
                 try:
                     parts = arg.split(',')
                     if len(parts) == 2:
                         lat, lon = map(float, parts)
                         super().__init__(lat=lat, lon=lon)
+                        self._validate()
                         return
                 except (ValueError, TypeError):
                     pass
             
             # Словарь {'lat': 55.75, 'lon': 37.62}
-            elif isinstance(arg, dict):
+            if isinstance(arg, dict):
                 super().__init__(**arg)
+                self._validate()
                 return
         
-        # Стандартная инициализация
-        elif len(args) == 2:
+        # GeoPoint(55.75, 37.62)
+        if len(args) == 2:
             lat, lon = args
             super().__init__(lat=float(lat), lon=float(lon))
+            self._validate()
             return
         
         # Именованные аргументы
         super().__init__(*args, **kwargs)
-        
-        # Валидация
         self._validate()
     
     def _validate(self):
@@ -576,6 +579,18 @@ class vMoney(BaseModel):
     
     currency: str = "RUB"
     """Валюта (RUB, USD, EUR и т.д.)"""
+
+    def __init__(self, *args, **kwargs):
+        """
+        - vMoney(amount=100.5, currency="RUB")
+        - vMoney(100.5, "RUB")
+        - vMoney(100.5)
+        """
+        if args and "amount" not in kwargs:
+            kwargs["amount"] = args[0]
+            if len(args) > 1 and "currency" not in kwargs:
+                kwargs["currency"] = args[1]
+        super().__init__(**kwargs)
     
     def __str__(self) -> str:
         """Строковое представление"""
@@ -589,24 +604,24 @@ class vMoney(BaseModel):
         if isinstance(other, vMoney):
             if other.currency != self.currency:
                 raise ValueError(f"Нельзя складывать разные валюты: {self.currency} и {other.currency}")
-            return vMoney(self.amount + other.amount, self.currency)
-        return vMoney(self.amount + float(other), self.currency)
+            return vMoney(amount=self.amount + other.amount, currency=self.currency)
+        return vMoney(amount=self.amount + float(other), currency=self.currency)
     
     def __sub__(self, other: Union['vMoney', float, int]) -> 'vMoney':
         """Вычитание"""
         if isinstance(other, vMoney):
             if other.currency != self.currency:
                 raise ValueError(f"Нельзя вычитать разные валюты: {self.currency} и {other.currency}")
-            return vMoney(self.amount - other.amount, self.currency)
-        return vMoney(self.amount - float(other), self.currency)
+            return vMoney(amount=self.amount - other.amount, currency=self.currency)
+        return vMoney(amount=self.amount - float(other), currency=self.currency)
     
     def __mul__(self, other: Union[float, int]) -> 'vMoney':
         """Умножение на число"""
-        return vMoney(self.amount * float(other), self.currency)
+        return vMoney(amount=self.amount * float(other), currency=self.currency)
     
     def __truediv__(self, other: Union[float, int]) -> 'vMoney':
         """Деление на число"""
-        return vMoney(self.amount / float(other), self.currency)
+        return vMoney(amount=self.amount / float(other), currency=self.currency)
     
     def to_dict(self, clear_meta: bool = True) -> dict:
         """Преобразует в словарь"""

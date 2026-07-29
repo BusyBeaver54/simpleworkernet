@@ -209,8 +209,8 @@ class BaseModel:
         if isinstance(val, dict):
             return self._process_dict_to_class(target_t, val)
         
-        # Список -> модель/список моделей
-        if isinstance(val, list):
+        # Список / кортеж -> модель (напр. GeoPoint([lat, lon]) / GeoPoint((lat, lon)))
+        if isinstance(val, (list, tuple)):
             return self._process_list_to_class(target_t, val, field_name)
         
         # Примитив -> простой тип
@@ -242,9 +242,9 @@ class BaseModel:
         
         return val
     
-    def _process_list_to_class(self, target_t: type, val: List, field_name: str) -> Any:
-        """Преобразует список в объект класса или список объектов."""
-        # Пытаемся создать объект из списка напрямую (например, GeoPoint([1,2]))
+    def _process_list_to_class(self, target_t: type, val, field_name: str) -> Any:
+        """Преобразует список/кортеж в объект класса или список объектов."""
+        # Пытаемся создать объект из последовательности напрямую (например, GeoPoint([1,2]))
         try:
             return target_t(val)
         except Exception:

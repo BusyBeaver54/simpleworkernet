@@ -39,9 +39,10 @@ def test_vflag():
 def test_geopoint_formats():
     p1 = GeoPoint(55.75, 37.62)
     p2 = GeoPoint([55.75, 37.62])
-    p3 = GeoPoint("55.75,37.62")
-    p4 = GeoPoint(lat=55.75, lon=37.62)
-    assert p1 == p2 == p3 == p4
+    p3 = GeoPoint((55.75, 37.62))
+    p4 = GeoPoint("55.75,37.62")
+    p5 = GeoPoint(lat=55.75, lon=37.62)
+    assert p1 == p2 == p3 == p4 == p5
     assert str(p1) == "55.75,37.62"
     assert p1.to_tuple() == (55.75, 37.62)
     assert p1.to_list() == [55.75, 37.62]
@@ -94,7 +95,7 @@ def test_ogrn():
 
 
 def test_money_ops():
-    m = vMoney(100.50, "RUB")
+    m = vMoney(amount=100.50, currency="RUB")
     assert str(m) == "100.50 RUB"
     m2 = m + 50.25
     assert abs(m2.amount - 150.75) < 1e-9
@@ -106,9 +107,15 @@ def test_money_ops():
     assert abs(m5.amount - 50.25) < 1e-9
 
 
+def test_money_positional():
+    m = vMoney(100.50, "RUB")
+    assert abs(m.amount - 100.50) < 1e-9
+    assert m.currency == "RUB"
+
+
 def test_money_currency_mismatch():
-    a = vMoney(10, "RUB")
-    b = vMoney(10, "USD")
+    a = vMoney(amount=10, currency="RUB")
+    b = vMoney(amount=10, currency="USD")
     try:
         _ = a + b
         assert False
