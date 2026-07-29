@@ -4,7 +4,7 @@
 
 Публичный API:
     Topology, CGraph, FNGraph, DataCache, ObjKey, Interface,
-    CGraphVertex, CGraphEdge, FNGraphVertex, FNGraphEdge,
+    Attenuation, AttenuationCatalog, PathReport,
     константы типов объектов.
 """
 
@@ -28,6 +28,12 @@ from .cache import DataCache
 from .graphs import CGraph, FNGraph
 from .topology import Topology
 from .merge import merge_cgraphs, merge_fngraphs
+from .attenuation import (
+    Attenuation,
+    AttenuationCatalog,
+    AttenuationSegment,
+    PathReport,
+)
 
 __all__ = [
     # constants
@@ -61,4 +67,9 @@ __all__ = [
     "merge_fngraphs",
     # high-level
     "Topology",
+    # attenuation
+    "Attenuation",
+    "AttenuationCatalog",
+    "AttenuationSegment",
+    "PathReport",
 ]
