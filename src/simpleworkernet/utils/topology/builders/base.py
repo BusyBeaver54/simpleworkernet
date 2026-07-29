@@ -5,7 +5,17 @@ from __future__ import annotations
 
 from typing import List, Optional, Set, Union
 
-from ..constants import SIDE_TYPES, TYPE_CUSTOMER, TYPE_FIBER, TYPE_OLT
+from ..constants import (
+    SIDE_TYPES,
+    TERMINAL_TYPES,
+    TYPE_CROSS,
+    TYPE_CUSTOMER,
+    TYPE_CWDM,
+    TYPE_FIBER,
+    TYPE_OLT,
+    TYPE_SPLITTER,
+    TYPE_SWITCH,
+)
 from ..context import BuildContext
 from ..keys import Interface, ObjKey
 from .handlers import get_handler
@@ -68,7 +78,8 @@ class GraphBuilder:
         ctx.start_iface = start_ifaces[0]
 
         for iface in sorted(
-            start_ifaces, key=lambda x: (x.obj.obj_type, str(x.obj.id), x.side, x.port)
+            start_ifaces,
+            key=lambda x: (x.obj.obj_type, str(x.obj.id), x.side, x.port),
         ):
             ctx.enqueue(iface)
 
@@ -109,7 +120,9 @@ class GraphBuilder:
             for port_num, info in ifaces.items():
                 if info.get("ifType") == 6 or info.get("ifTypeText") == "gpon":
                     result.append(
-                        Interface(ObjKey(TYPE_OLT, object_id), side=1, port=int(port_num))
+                        Interface(
+                            ObjKey(TYPE_OLT, object_id), side=1, port=int(port_num)
+                        )
                     )
             return result
 
@@ -135,10 +148,18 @@ class GraphBuilder:
                         or getattr(rec, "number", None)
                     )
                     if iface_num is not None and int(iface_num) == port:
-                        s = side if side is not None else (
-                            int(rec.clps_first) if rec.clps_first is not None else 1
+                        s = (
+                            side
+                            if side is not None
+                            else (
+                                int(rec.clps_first)
+                                if rec.clps_first is not None
+                                else 1
+                            )
                         )
-                        fiber_id = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                        fiber_id = (
+                            int(rec.clps_mid) if rec.clps_mid is not None else 0
+                        )
                         result.append(Interface(key, side=s, port=fiber_id))
                         break
             else:
@@ -158,18 +179,84 @@ class GraphBuilder:
         return result
 
     def _mark_terminate_vertices(self, ctx: BuildContext) -> None:
-        """Упрощённая разметка конечных вершин."""
-        from ..constants import DEVICE_TYPES, TERMINAL_TYPES, TYPE_CROSS, TYPE_FIBER
+        """
+        Разметка конечных вершин (логика как в оригинале).
 
+        - OLT, switch, терминальные — всегда конечны
+        - кросс/кабель — конечны, если на противоположной стороне нет
+          коммутации или сосед терминальный
+        - сплиттер/CWDM — конечны, если нет внешних не-терминальных соседей
+        """
         g = ctx.graph
+
+        def neighbor_key(record):
+            t = getattr(record, "object_type", None)
+            if not t:
+                return None
+            if t == TYPE_CROSS:
+                uuid = getattr(record, "object_uuid", None)
+                return ObjKey(t, uuid) if uuid else None
+            oid = getattr(record, "object_id", None)
+            return ObjKey(t, oid) if oid is not None else None
+
         for v in g.vs:
             obj_type = v["obj_type"]
             obj_id = v["obj_id"]
-            if obj_type in (TYPE_OLT, "switch") or obj_type in TERMINAL_TYPES:
+            side = v.attributes().get("side", 1)
+            port = v.attributes().get("port", 0)
+            obj_key = ObjKey(obj_type, obj_id)
+
+            if obj_type in (TYPE_OLT, TYPE_SWITCH) or obj_type in TERMINAL_TYPES:
                 v["terminate_vertex"] = True
-                v["finish_data"] = ctx.finish_data.get(ObjKey(obj_type, obj_id), [])
+                v["finish_data"] = ctx.finish_data.get(obj_key, [])
                 continue
-            # по умолчанию — конечная, если нет продолжения в графе
-            v["terminate_vertex"] = g.g.degree(v.index) <= 1
-            if v["terminate_vertex"]:
-                v["finish_data"] = ctx.finish_data.get(ObjKey(obj_type, obj_id), [])
+
+            comms = g.load_commutations(obj_key)
+            if not comms:
+                v["terminate_vertex"] = True
+                v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                continue
+
+            if obj_type in (TYPE_CROSS, TYPE_FIBER):
+                opposite_side = 2 if side == 1 else 1
+                opposite_record = None
+                for rec in comms:
+                    if (
+                        rec.clps_first is not None
+                        and int(rec.clps_first) == opposite_side
+                        and rec.clps_mid is not None
+                        and int(rec.clps_mid) == port
+                    ):
+                        opposite_record = rec
+                        break
+                if opposite_record is None:
+                    v["terminate_vertex"] = True
+                    v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                    continue
+                nk = neighbor_key(opposite_record)
+                if nk is None:
+                    v["terminate_vertex"] = True
+                    v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                    continue
+                is_term = nk.obj_type in TERMINAL_TYPES
+                v["terminate_vertex"] = is_term
+                v["finish_data"] = (
+                    ctx.finish_data.get(obj_key, []) if is_term else []
+                )
+                continue
+
+            if obj_type in (TYPE_SPLITTER, TYPE_CWDM):
+                has_non_term = False
+                for rec in comms:
+                    nk = neighbor_key(rec)
+                    if nk is not None and nk.obj_type not in TERMINAL_TYPES:
+                        has_non_term = True
+                        break
+                v["terminate_vertex"] = not has_non_term
+                v["finish_data"] = (
+                    ctx.finish_data.get(obj_key, []) if not has_non_term else []
+                )
+                continue
+
+            v["terminate_vertex"] = True
+            v["finish_data"] = ctx.finish_data.get(obj_key, [])
