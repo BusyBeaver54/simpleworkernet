@@ -27,6 +27,7 @@ from .models import CGraphVertex, CGraphEdge, FNGraphVertex, FNGraphEdge
 from .cache import DataCache
 from .graphs import CGraph, FNGraph
 from .topology import Topology
+from .merge import merge_cgraphs, merge_fngraphs
 
 __all__ = [
     # constants
@@ -55,6 +56,9 @@ __all__ = [
     # graphs
     "CGraph",
     "FNGraph",
+    # merge
+    "merge_cgraphs",
+    "merge_fngraphs",
     # high-level
     "Topology",
 ]
