@@ -72,8 +72,7 @@ else:
     from .smartdata.metadata import MetaData, PathSegment, SegmentType
     from .utils.decorators import api_method, logged_method, timer
     from .utils.graphics import save_svg, load_svg, svg_to_png
-    from .utils.graph import CGraph, FNGraph
-    from .utils.topology import Topology
+    from .utils.topology import Topology, CGraph, FNGraph
     from .scripts.uninstall import cleanup_with_confirmation, cleanup
 
     # ------------------------------------------------------------------------
