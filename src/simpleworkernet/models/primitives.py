@@ -21,6 +21,8 @@ except ImportError:
     HAS_PYPROJ = False
 
 _MERCATOR_RADIUS = 6378137.0
+# Средний радиус Земли для локальной ENU-плоскости (метры)
+_EARTH_RADIUS = 6378137.0
 
 
 class vStr(str):
@@ -85,15 +87,48 @@ def _get_utm_transformer(lat: float, lon: float):
     return pyproj.Transformer.from_crs("EPSG:4326", proj_str, always_xy=True)
 
 
+def _local_en(
+    lat: float, lon: float, lat0: float, lon0: float
+) -> Tuple[float, float]:
+    """
+    Локальная касательная плоскость (East, North) в метрах.
+
+    Ось X — восток, Y — истинный север. Совпадает с ориентацией
+    типичной картографической подложки (север вверх).
+    """
+    lat_r = math.radians(lat)
+    lon_r = math.radians(lon)
+    lat0_r = math.radians(lat0)
+    lon0_r = math.radians(lon0)
+    x = _EARTH_RADIUS * (lon_r - lon0_r) * math.cos(lat0_r)
+    y = _EARTH_RADIUS * (lat_r - lat0_r)
+    return x, y
+
+
+def _local_en_inverse(
+    x: float, y: float, lat0: float, lon0: float
+) -> Tuple[float, float]:
+    lat0_r = math.radians(lat0)
+    lat = lat0 + math.degrees(y / _EARTH_RADIUS)
+    lon = lon0 + math.degrees(x / (_EARTH_RADIUS * math.cos(lat0_r)))
+    return lat, lon
+
+
 def _project_latlon(
     lat: float,
     lon: float,
     *,
-    projection: str = "utm",
+    projection: str = "local",
     scale: float = 1.0,
     offset: Tuple[float, float] = (0.0, 0.0),
+    origin_lat: Optional[float] = None,
+    origin_lon: Optional[float] = None,
 ) -> Tuple[float, float]:
-    if projection == "utm":
+    if projection == "local":
+        if origin_lat is None or origin_lon is None:
+            raise ValueError("projection='local' требует origin (center)")
+        x, y = _local_en(lat, lon, origin_lat, origin_lon)
+    elif projection == "utm":
         transformer = _get_utm_transformer(lat, lon)
         x, y = transformer.transform(lon, lat)
     elif projection == "mercator":
@@ -102,7 +137,9 @@ def _project_latlon(
         x = _MERCATOR_RADIUS * lon_rad
         y = _MERCATOR_RADIUS * math.log(math.tan(math.pi / 4 + lat_rad / 2))
     else:
-        raise ValueError(f"Неизвестная проекция: {projection!r} (utm|mercator)")
+        raise ValueError(
+            f"Неизвестная проекция: {projection!r} (local|utm|mercator)"
+        )
     return x * scale + offset[0], y * scale + offset[1]
 
 
@@ -112,12 +149,14 @@ def _unproject_xy(
     *,
     ref_lat: float,
     ref_lon: float,
-    projection: str = "utm",
+    projection: str = "local",
     scale: float = 1.0,
     offset: Tuple[float, float] = (0.0, 0.0),
 ) -> Tuple[float, float]:
     mx = (x - offset[0]) / scale
     my = (y - offset[1]) / scale
+    if projection == "local":
+        return _local_en_inverse(mx, my, ref_lat, ref_lon)
     if projection == "utm":
         transformer = _get_utm_transformer(ref_lat, ref_lon)
         lon, lat = transformer.transform(mx, my, direction="INVERSE")
@@ -148,10 +187,15 @@ def _as_float(value: Any, name: str) -> float:
 @smart_model
 class GeoPoint(BaseModel):
     """
-    Географические координаты WGS84 (широта, долгота) + проекции в плоские XY.
+    Географические координаты WGS84 + проекции в плоские XY (метры).
 
-    pt.to_xy(center=origin, projection="utm" | "mercator")
-    GeoPoint.from_xy(x, y, center=origin)
+    По умолчанию ``projection="local"`` — локальная плоскость East/North
+    относительно ``center``: ось Y = истинный север (как у карты «север вверх»).
+    Это устраняет поворот объектов относительно подложки в CAD.
+
+        pt.to_xy(center=origin)                    # local ENU
+        pt.to_xy(center=origin, projection="utm")  # UTM (pyproj)
+        GeoPoint.from_xy(x, y, center=origin)
     """
 
     lat: float
@@ -168,7 +212,11 @@ class GeoPoint(BaseModel):
             elif isinstance(arg, Sequence) and not isinstance(arg, (str, bytes)) and len(arg) >= 2:
                 lat, lon = arg[0], arg[1]
             elif isinstance(arg, str):
-                parts = [p.strip() for p in arg.replace(";", ",").replace(" ", ",").split(",") if p.strip()]
+                parts = [
+                    p.strip()
+                    for p in arg.replace(";", ",").replace(" ", ",").split(",")
+                    if p.strip()
+                ]
                 if len(parts) >= 2:
                     lat, lon = parts[0], parts[1]
                 else:
@@ -184,7 +232,6 @@ class GeoPoint(BaseModel):
             lat = kwargs.get("lat", kwargs.get("latitude"))
             lon = kwargs.get("lon", kwargs.get("longitude"))
 
-        # BaseModel может вернуть None через __getattr__ — задаём явно
         super().__init__(lat=_as_float(lat, "lat"), lon=_as_float(lon, "lon"))
         self._validate()
 
@@ -238,15 +285,37 @@ class GeoPoint(BaseModel):
         self,
         center: Optional[Any] = None,
         *,
-        projection: str = "utm",
+        projection: str = "local",
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
         absolute: bool = False,
         auto_scale_mercator: bool = True,
-        correct_grid_north: bool = False,
+        correct_grid_north: Optional[bool] = None,
         rotation_deg: float = 0.0,
     ) -> Tuple[float, float]:
+        """
+        WGS84 → (x, y) в метрах.
+
+        projection:
+            ``"local"`` (по умолчанию) — East/North относительно center,
+            Y = истинный север (совпадает с картой «север вверх»).
+            ``"utm"`` / ``"mercator"`` — классические проекции.
+
+        correct_grid_north:
+            Для UTM по умолчанию True при наличии center (выравнивание
+            с true north). Для local не нужен.
+        """
+        if projection == "local" and center is None:
+            # локальная система без origin бессмысленна — origin = self → (0, 0)
+            center = self
+
         c = GeoPoint(center) if center is not None else None
+
+        if correct_grid_north is None:
+            correct_grid_north = projection == "utm" and c is not None and not absolute
+
+        origin_lat = float(c.lat) if c is not None else None
+        origin_lon = float(c.lon) if c is not None else None
 
         eff_scale = scale
         if (
@@ -256,6 +325,21 @@ class GeoPoint(BaseModel):
             and auto_scale_mercator
         ):
             eff_scale = scale / math.cos(math.radians(float(c.lat)))
+
+        if projection == "local":
+            x, y = _project_latlon(
+                float(self.lat),
+                float(self.lon),
+                projection="local",
+                scale=eff_scale,
+                offset=offset,
+                origin_lat=origin_lat,
+                origin_lon=origin_lon,
+            )
+            # local уже относительно origin
+            if rotation_deg:
+                x, y = _rotate2d(x, y, rotation_deg)
+            return float(x), float(y)
 
         x, y = _project_latlon(
             float(self.lat),
@@ -289,12 +373,12 @@ class GeoPoint(BaseModel):
         center: Optional[Any] = None,
         *,
         z: float = 0.0,
-        projection: str = "utm",
+        projection: str = "local",
         scale: float = 1.0,
         offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         absolute: bool = False,
         auto_scale_mercator: bool = True,
-        correct_grid_north: bool = False,
+        correct_grid_north: Optional[bool] = None,
         rotation_deg: float = 0.0,
     ) -> Tuple[float, float, float]:
         x, y = self.to_xy(
@@ -316,14 +400,25 @@ class GeoPoint(BaseModel):
         y: float,
         center: Any,
         *,
-        projection: str = "utm",
+        projection: str = "local",
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
-        correct_grid_north: bool = False,
+        correct_grid_north: Optional[bool] = None,
         rotation_deg: float = 0.0,
     ) -> "GeoPoint":
         c = cls(center)
         dx, dy = float(x), float(y)
+
+        if correct_grid_north is None:
+            correct_grid_north = projection == "utm"
+
+        if projection == "local":
+            dx, dy = _rotate2d(dx, dy, -rotation_deg)
+            # снять scale/offset: _local_en_inverse ожидает метры EN
+            mx = (dx - offset[0]) / scale
+            my = (dy - offset[1]) / scale
+            lat, lon = _local_en_inverse(mx, my, float(c.lat), float(c.lon))
+            return cls(lat, lon)
 
         rot = -rotation_deg
         if correct_grid_north and projection == "utm":
@@ -409,12 +504,12 @@ class GeoPointArray:
         self,
         center: Optional[Any] = None,
         *,
-        projection: str = "utm",
+        projection: str = "local",
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
         absolute: bool = False,
         auto_scale_mercator: bool = True,
-        correct_grid_north: bool = False,
+        correct_grid_north: Optional[bool] = None,
         rotation_deg: float = 0.0,
     ) -> List[Tuple[float, float]]:
         c = center
@@ -440,7 +535,7 @@ class GeoPointArray:
         *,
         zs: Optional[Sequence[float]] = None,
         default_z: float = 0.0,
-        projection: str = "utm",
+        projection: str = "local",
         scale: float = 1.0,
         offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         **kwargs,
@@ -460,10 +555,10 @@ class GeoPointArray:
         xy_list: Sequence[Sequence[float]],
         center: Any,
         *,
-        projection: str = "utm",
+        projection: str = "local",
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
-        correct_grid_north: bool = False,
+        correct_grid_north: Optional[bool] = None,
         rotation_deg: float = 0.0,
     ) -> "GeoPointArray":
         pts = [
