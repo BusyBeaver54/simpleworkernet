@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpleworkernet"
-version = "1.0.6"
+version = "1.0.7"
 description = "Python клиент для API WorkerNet с поддержкой SmartData"
 readme = "README.md"
 authors = [
@@ -46,3 +46,13 @@ include = ["simpleworkernet*"]
 
 [tool.setuptools.package-data]
 simpleworkernet = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "integration: тесты против реального API WorkerNet",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
