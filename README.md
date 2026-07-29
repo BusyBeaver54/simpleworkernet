@@ -6,13 +6,6 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 [![Supported Python versions](https://img.shields.io/pypi/pyversions/simpleworkernet.svg?logo=python&logoColor=FFE873)](https://www.python.org/downloads/)
 [![Licence](https://img.shields.io/github/license/busy4beaver/simpleworkernet.svg)](LICENSE)
 
-| | |
-|---|---|
-| **Версия** | 1.0.6 |
-| **Python** | ≥ 3.12 |
-| **Лицензия** | MIT |
-| **Автор** | Andrey Litvinov (`busy4beaver`) |
-
 ---
 
 ## Содержание
@@ -90,8 +83,7 @@ src/simpleworkernet/
 │   ├── app_name.py
 │   ├── graphics.py          # SVGHandler, ImageHandler
 │   ├── coordinates.py       # geo_to_xy, geo_to_xyz, xy_to_geo
-│   ├── graph.py             # DEPRECATED → re-export из topology
-│   └── topology/            # модульная графовая топология
+│   └── topology/            # графовая топология сети
 │       ├── topology.py      # Topology
 │       ├── cache.py         # DataCache
 │       ├── keys.py          # ObjKey, Interface
@@ -381,7 +373,6 @@ for state, group in by_state.items():
 Метаданные:
 
 ```python
-from simpleworkernet import SmartData
 from simpleworkernet.smartdata.metadata import MetaData, SegmentType
 
 for item in customers:
@@ -606,9 +597,8 @@ from simpleworkernet.utils.topology import (
 )
 # или
 from simpleworkernet.utils import Topology, CGraph, FNGraph
+from simpleworkernet import Topology, CGraph, FNGraph
 ```
-
-> `simpleworkernet.utils.graph` — deprecated re-export; используйте `utils.topology`.
 
 **Зависимость:** `pip install python-igraph`
 

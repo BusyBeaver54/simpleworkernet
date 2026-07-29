@@ -1,40 +1,22 @@
-"""Тесты merge_cgraphs / merge_fngraphs (без реального API)."""
+"""Тесты merge_cgraphs / merge_fngraphs."""
 
-from unittest.mock import MagicMock
-
-from simpleworkernet.utils.topology.cache import DataCache
 from simpleworkernet.utils.topology.graphs.cgraph import CGraph
 from simpleworkernet.utils.topology.graphs.fngraph import FNGraph
 from simpleworkernet.utils.topology.keys import Interface, ObjKey
 from simpleworkernet.utils.topology.merge import merge_cgraphs, merge_fngraphs
 
 
-def _make_cgraph(client, cache, ifaces_edges):
-    """ifaces_edges: list of (iface, attrs) and list of edges (i1,i2,attrs)."""
-    g = CGraph(client, cache=cache)
-    return g
-
-
-def test_merge_cgraphs_empty():
-    client = MagicMock()
-    cache = DataCache()
+def test_merge_cgraphs_empty(client, cache):
     assert merge_cgraphs([], client, cache) is None
 
 
-def test_merge_cgraphs_single():
-    client = MagicMock()
-    cache = DataCache()
+def test_merge_cgraphs_single(client, cache):
     g = CGraph(client, cache=cache)
-    iface = Interface(ObjKey("olt", 1), 1, 1)
-    g.add_iface_vertex(iface)
-    result = merge_cgraphs([g], client, cache)
-    assert result is g
+    g.add_iface_vertex(Interface(ObjKey("olt", 1), 1, 1))
+    assert merge_cgraphs([g], client, cache) is g
 
 
-def test_merge_cgraphs_overlapping():
-    client = MagicMock()
-    cache = DataCache()
-
+def test_merge_cgraphs_overlapping(client, cache):
     g1 = CGraph(client, cache=cache)
     a = Interface(ObjKey("olt", 1), 1, 1)
     b = Interface(ObjKey("fiber", 10), 1, 1)
@@ -55,19 +37,17 @@ def test_merge_cgraphs_overlapping():
     assert merged.is_connected()
 
 
-def test_merge_fngraphs_single():
-    client = MagicMock()
-    cache = DataCache()
+def test_merge_fngraphs_empty(client, cache):
+    assert merge_fngraphs([], client, cache) is None
+
+
+def test_merge_fngraphs_single(client, cache):
     g = FNGraph(client, cache=cache)
     g._add_node_vertex(1)
-    result = merge_fngraphs([g], client, cache)
-    assert result is g
+    assert merge_fngraphs([g], client, cache) is g
 
 
-def test_merge_fngraphs_overlapping():
-    client = MagicMock()
-    cache = DataCache()
-
+def test_merge_fngraphs_overlapping(client, cache):
     g1 = FNGraph(client, cache=cache)
     g1._add_node_vertex(1)
     g1._add_node_vertex(2)

@@ -13,15 +13,16 @@ from simpleworkernet.utils.topology.constants import (
     TYPE_CWDM,
     TYPE_FIBER,
     TYPE_OLT,
+    TYPE_ONU,
+    TYPE_RADIO,
     TYPE_SPLITTER,
     TYPE_SWITCH,
 )
 
 
 def test_get_handler_terminal():
-    assert isinstance(get_handler(TYPE_OLT), TerminalHandler)
-    assert isinstance(get_handler(TYPE_SWITCH), TerminalHandler)
-    assert isinstance(get_handler(TYPE_CUSTOMER), TerminalHandler)
+    for t in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER):
+        assert isinstance(get_handler(t), TerminalHandler)
 
 
 def test_get_handler_side():
