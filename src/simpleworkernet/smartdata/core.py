@@ -569,12 +569,66 @@ class SmartData(Generic[T]):
     # ------------------------------------------------------------------------
 
     @staticmethod
+    def _dict_to_list(d: dict) -> list:
+        """Словарь с (числовыми) ключами → список по возрастанию ключей."""
+        keys = sorted(
+            [k for k in d.keys() if k != META_KEY],
+            key=lambda x: int(x) if isinstance(x, str) and x.isdigit() else x,
+        )
+        return [d[k] for k in keys if k in d]
+
+    @staticmethod
+    def _list_to_dict(lst: list) -> dict:
+        """Список → словарь со строковыми индексами (пропуская None)."""
+        return {str(i): v for i, v in enumerate(lst) if v is not None}
+
+    @staticmethod
+    def _replace_in_parent(parent: Any, key: Any, new_val: Any) -> Any:
+        """
+        Подменяет значение в родителе и возвращает new_val.
+        parent=None означает корень (target) — тип корня не меняем,
+        содержимое копируем в существующий контейнер, если возможно.
+        """
+        if parent is None:
+            # Корень всегда dict (сигнатура target: Dict).
+            # Если нужен list — храним как dict с индексными ключами нельзя
+            # для list-операций; поэтому при необходимости list на корне
+            # возвращаем new_val без привязки (вызывающий не использует корень как list
+            # напрямую через target, только через current).
+            # На практике корень — dict полей; IDX на корне редок.
+            return new_val
+        parent[key] = new_val
+        return new_val
+
+    @staticmethod
+    def _ensure_list(current: Any, parent: Any, parent_key: Any) -> list:
+        """Гарантирует, что current — list; при необходимости конвертирует dict."""
+        if isinstance(current, list):
+            return current
+        if isinstance(current, dict):
+            lst = SmartData._dict_to_list(current)
+            return SmartData._replace_in_parent(parent, parent_key, lst)
+        return SmartData._replace_in_parent(parent, parent_key, [])
+
+    @staticmethod
+    def _ensure_dict(current: Any, parent: Any, parent_key: Any) -> dict:
+        """Гарантирует, что current — dict; при необходимости конвертирует list."""
+        if isinstance(current, dict):
+            return current
+        if isinstance(current, list):
+            d = SmartData._list_to_dict(current)
+            return SmartData._replace_in_parent(parent, parent_key, d)
+        return SmartData._replace_in_parent(parent, parent_key, {})
+
+    @staticmethod
     def _insert_value(target: Dict, value: Any, path: List[PathSegment]) -> None:
         """
         Вставляет значение value в структуру target по пути path.
         Если по пути уже есть значение, они объединяются в список (сохраняя порядок).
 
-        Внутренний метод для восстановления структуры из плоских элементов с метаданными.
+        При смене типа контейнера (dict ↔ list) подмена идёт через родителя:
+        in-place ``clear()`` + ``extend``/``update`` невозможны — тип объекта
+        после ``clear()`` не меняется.
 
         Args:
             target: Словарь-приёмник.
@@ -595,62 +649,56 @@ class SmartData(Generic[T]):
                 target['_value'] = value
             return
 
-        # Идём по пути, создавая структуру
-        current = target
-        for seg in path[:-1]:  # все сегменты, кроме последнего
+        current: Any = target
+        parent: Any = None
+        parent_key: Any = None
+
+        # Идём по пути, создавая структуру (все сегменты, кроме последнего)
+        for i, seg in enumerate(path[:-1]):
+            next_seg = path[i + 1]
+            want_list = next_seg.type == SegmentType.IDX
+
             if seg.type == SegmentType.IDX:
                 idx = int(seg.key)
-                if not isinstance(current, list):
-                    # Превращаем словарь в список (сохраняем порядок по ключам)
-                    if isinstance(current, dict):
-                        keys = sorted([k for k in current.keys() if k != META_KEY], key=lambda x: int(x) if x.isdigit() else x)
-                        lst = [current[k] for k in keys if k in current]
-                        current.clear()
-                        current.extend(lst)
-                    else:
-                        current = []
+                current = SmartData._ensure_list(current, parent, parent_key)
+                if parent is None:
+                    # IDX на корне: target — dict, нельзя сделать list.
+                    # Используем строковые ключи как индексы внутри target.
+                    key = str(idx)
+                    if key not in target or target[key] is None:
+                        target[key] = [] if want_list else {}
+                    parent, parent_key, current = target, key, target[key]
+                    continue
+
                 while len(current) <= idx:
                     current.append(None)
                 if current[idx] is None:
-                    # Создаём контейнер для следующего сегмента
-                    next_seg = path[path.index(seg) + 1]
-                    if next_seg.type == SegmentType.IDX:
-                        current[idx] = []
-                    else:
-                        current[idx] = {}
-                current = current[idx]
+                    current[idx] = [] if want_list else {}
+                parent, parent_key, current = current, idx, current[idx]
             else:
                 key = seg.key
-                if not isinstance(current, dict):
-                    if isinstance(current, list):
-                        d = {}
-                        for i, v in enumerate(current):
-                            if v is not None:
-                                d[str(i)] = v
-                        current.clear()
-                        current.update(d)
-                    else:
-                        current = {}
+                current = SmartData._ensure_dict(current, parent, parent_key)
+                if parent is None:
+                    current = target  # корень
                 if key not in current or current[key] is None:
-                    next_seg = path[path.index(seg) + 1]
-                    if next_seg.type == SegmentType.IDX:
-                        current[key] = []
-                    else:
-                        current[key] = {}
-                current = current[key]
+                    current[key] = [] if want_list else {}
+                parent, parent_key, current = current, key, current[key]
 
         # Последний сегмент
         last_seg = path[-1]
         if last_seg.type == SegmentType.IDX:
             idx = int(last_seg.key)
-            if not isinstance(current, list):
-                if isinstance(current, dict):
-                    keys = sorted([k for k in current.keys() if k != META_KEY], key=lambda x: int(x) if x.isdigit() else x)
-                    lst = [current[k] for k in keys if k in current]
-                    current.clear()
-                    current.extend(lst)
+            current = SmartData._ensure_list(current, parent, parent_key)
+            if parent is None:
+                key = str(idx)
+                if key in target and target[key] is not None:
+                    if not isinstance(target[key], list):
+                        target[key] = [target[key]]
+                    target[key].append(value)
                 else:
-                    current = []
+                    target[key] = value
+                return
+
             while len(current) <= idx:
                 current.append(None)
             if current[idx] is not None:
@@ -661,16 +709,9 @@ class SmartData(Generic[T]):
                 current[idx] = value
         else:
             key = last_seg.key
-            if not isinstance(current, dict):
-                if isinstance(current, list):
-                    d = {}
-                    for i, v in enumerate(current):
-                        if v is not None:
-                            d[str(i)] = v
-                    current.clear()
-                    current.update(d)
-                else:
-                    current = {}
+            current = SmartData._ensure_dict(current, parent, parent_key)
+            if parent is None:
+                current = target
             if key in current:
                 if not isinstance(current[key], list):
                     current[key] = [current[key]]
