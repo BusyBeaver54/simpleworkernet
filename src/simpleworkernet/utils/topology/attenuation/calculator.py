@@ -21,6 +21,11 @@ from .models import AttenuationSegment, PathReport
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
 
+# В handlers.SplitterCwdmHandler: side=1 ↔ side=2 fully connected.
+# Соглашение WorkerNet / handlers: side 1 = IN, side 2 = OUT.
+_SPLITTER_IN_SIDE = 1
+_SPLITTER_OUT_SIDE = 2
+
 
 def _label_vertex(vattrs: dict) -> str:
     return (
@@ -36,10 +41,8 @@ class Attenuation:
     Не вызывается при build — только по явному запросу.
 
         att = Attenuation(cgraph, wavelength=1550)
-        r = att.olt_to_customer(68168)
-        r = att.between("olt", 1, port=2, to_type="customer", to_id=68168)
-        r = att.olt_to_splitter_out(splitter_id=10, port=3)
-        r = att.to_node_first_hop(node_id=23779)
+        r = att.olt_to_customer(customer_id)
+        r = att.along_linear()          # если cgraph уже линейный
     """
 
     def __init__(
@@ -111,7 +114,6 @@ class Attenuation:
             port = ref[3] if len(ref) > 3 else None
             return self.find_vertex(obj_type, obj_id, side=side, port=port)
         if isinstance(ref, str) and ":" in ref:
-            # "olt:123" or "fiber:5:1:2"
             parts = ref.split(":")
             obj_type = parts[0]
             obj_id = parts[1]
@@ -134,9 +136,7 @@ class Attenuation:
     # path finding
     # ------------------------------------------------------------------
 
-    def shortest_path(
-        self, source: int, target: int
-    ) -> List[int]:
+    def shortest_path(self, source: int, target: int) -> List[int]:
         try:
             path = self.g.get_shortest_paths(source, to=target, output="vpath")
             if path and path[0]:
@@ -144,6 +144,57 @@ class Attenuation:
         except Exception:
             pass
         return []
+
+    def linear_vertex_order(self) -> List[int]:
+        """
+        Порядок вершин линейного CGraph (после topology_from_commutation).
+
+        Идём от конечной степени-1 вершины (customer/OLT) по единственному
+        соседу, не возвращаясь назад.
+        """
+        n = self.g.vcount()
+        if n == 0:
+            return []
+        if n == 1:
+            return [0]
+
+        degrees = self.g.degree()
+        ends = [i for i, d in enumerate(degrees) if d == 1]
+        if not ends:
+            # цикл или плотный — fallback: shortest OLT→customer
+            olt = self.primary_olt()
+            custs = self.find_customers()
+            if olt is not None and custs:
+                return self.shortest_path(olt, custs[0])
+            return list(range(n))
+
+        # предпочтительно старт с OLT, иначе customer, иначе любой конец
+        start = ends[0]
+        for i in ends:
+            t = self.g.vs[i]["obj_type"]
+            if t == TYPE_OLT:
+                start = i
+                break
+            if t == TYPE_CUSTOMER:
+                start = i
+
+        order = [start]
+        prev = None
+        cur = start
+        while True:
+            neighbors = [
+                n_idx
+                for n_idx in self.g.neighbors(cur)
+                if n_idx != prev
+            ]
+            if not neighbors:
+                break
+            nxt = neighbors[0]
+            order.append(nxt)
+            prev, cur = cur, nxt
+            if len(order) > n:
+                break
+        return order
 
     def _direction_of_path(self, vpath: Sequence[int]) -> str:
         if not vpath:
@@ -160,13 +211,44 @@ class Attenuation:
         return "unknown"
 
     # ------------------------------------------------------------------
+    # splitter side helpers (handlers: side1 ↔ side2)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _splitter_out_vertex(ua: dict, va: dict) -> dict:
+        """
+        На internal-ребре сплиттера выбираем OUT-вершину.
+
+        Handlers: side=1 (IN) полностью связан с side=2 (OUT).
+        Затухание порта = порт OUT-стороны (side 2).
+        Если стороны перепутаны в данных — берём сторону с большим side.
+        """
+        if (
+            ua.get("obj_type") == TYPE_SPLITTER
+            and va.get("obj_type") == TYPE_SPLITTER
+            and str(ua.get("obj_id")) == str(va.get("obj_id"))
+        ):
+            us, vs_ = int(ua.get("side", 1)), int(va.get("side", 1))
+            if us == _SPLITTER_OUT_SIDE and vs_ == _SPLITTER_IN_SIDE:
+                return ua
+            if vs_ == _SPLITTER_OUT_SIDE and us == _SPLITTER_IN_SIDE:
+                return va
+            # обе out или обе in — по большему side, затем port
+            if us != vs_:
+                return ua if us > vs_ else va
+            return ua if int(ua.get("port", 0)) >= int(va.get("port", 0)) else va
+
+        if ua.get("obj_type") == TYPE_SPLITTER:
+            return ua
+        return va
+
+    # ------------------------------------------------------------------
     # segment contribution
     # ------------------------------------------------------------------
 
     def _fiber_length(
         self, fiber_id: Union[int, str], fiber_obj: Any
     ) -> Tuple[Optional[float], str]:
-        # кэш длин
         if self.cache is not None and hasattr(self.cache, "get_fiber_length_m"):
             cached = self.cache.get_fiber_length_m(fiber_id)
             if cached is not None:
@@ -207,12 +289,10 @@ class Attenuation:
         v: int,
         direction: str,
     ) -> List[AttenuationSegment]:
-        """Вклады на ребре u→v (с учётом направления для сплиттера)."""
         segs: List[AttenuationSegment] = []
         ua, va = self._vertex_attrs(u), self._vertex_attrs(v)
 
-        # найти ребро
-        eid = None
+        eid = -1
         try:
             eid = self.g.get_eid(u, v, directed=False, error=False)
         except Exception:
@@ -240,7 +320,7 @@ class Attenuation:
             )
             return segs
 
-        # --- fiber span (оба конца — fiber одного кабеля, разные side) ---
+        # --- fiber internal span (FiberHandler: opposite sides, is_internal) ---
         if (
             ua.get("obj_type") == TYPE_FIBER
             and va.get("obj_type") == TYPE_FIBER
@@ -250,57 +330,77 @@ class Attenuation:
             segs.extend(self._fiber_segments(ua))
             return segs
 
-        # --- internal splitter: in↔out ---
+        # --- splitter internal IN↔OUT (SplitterCwdmHandler) ---
         if is_internal and (
             ua.get("obj_type") == TYPE_SPLITTER
-            or va.get("obj_type") == TYPE_SPLITTER
+            and va.get("obj_type") == TYPE_SPLITTER
+            and str(ua.get("obj_id")) == str(va.get("obj_id"))
         ):
             segs.extend(self._splitter_segments(ua, va, direction))
             return segs
 
-        # --- cross adapter on external hop touching cross ---
-        for attrs in (ua, va):
-            if attrs.get("obj_type") == TYPE_CROSS:
-                db = self.catalog.adapter_db()
-                segs.append(
-                    AttenuationSegment(
-                        kind="adapter",
-                        db=db,
-                        description=(
-                            f"adapter cross:{attrs.get('obj_id')} "
-                            f"port={attrs.get('port')}"
-                        ),
-                        obj_type=TYPE_CROSS,
-                        obj_id=str(attrs.get("obj_id")),
-                        port=attrs.get("port"),
-                        side=attrs.get("side"),
-                        wavelength_nm=self.wavelength,
-                        source="default",
-                    )
+        # --- cross internal adapter (CrossHandler: side1↔side2, is_internal) ---
+        if is_internal and (
+            ua.get("obj_type") == TYPE_CROSS
+            and va.get("obj_type") == TYPE_CROSS
+            and str(ua.get("obj_id")) == str(va.get("obj_id"))
+        ):
+            db = self.catalog.adapter_db()
+            segs.append(
+                AttenuationSegment(
+                    kind="adapter",
+                    db=db,
+                    description=(
+                        f"adapter cross:{ua.get('obj_id')} "
+                        f"port={ua.get('port')}"
+                    ),
+                    obj_type=TYPE_CROSS,
+                    obj_id=str(ua.get("obj_id")),
+                    port=ua.get("port"),
+                    wavelength_nm=self.wavelength,
+                    source="default",
                 )
+            )
+            return segs
 
-        # connector-like external joint (не internal, не fiber-span)
-        if not is_internal and not segs:
-            # стык коннектор/сварка — мягкий default, если не fiber
-            if TYPE_FIBER in (ua.get("obj_type"), va.get("obj_type")):
+        # --- external hop ---
+        if not is_internal:
+            # стык к кроссу снаружи — уже учтён internal adapter;
+            # здесь: splice/connector на внешнем ребре
+            kinds = {ua.get("obj_type"), va.get("obj_type")}
+            if TYPE_FIBER in kinds:
                 db = self.catalog.splice_db()
                 segs.append(
                     AttenuationSegment(
                         kind="splice",
                         db=db,
-                        description="splice/connector joint",
+                        description="splice at fiber joint",
                         source="default",
                         wavelength_nm=self.wavelength,
                         meta={"connect_id": connect_id},
                     )
                 )
-            else:
+            elif TYPE_CROSS not in kinds:
+                # не дублируем adapter, если один конец — cross (internal уже дал)
                 db = self.catalog.connector_db()
                 segs.append(
                     AttenuationSegment(
                         kind="connector",
                         db=db,
                         description="connector joint",
+                        source="default",
+                        wavelength_nm=self.wavelength,
+                        meta={"connect_id": connect_id},
+                    )
+                )
+            else:
+                # external к кроссу: лёгкий connector (патч)
+                db = self.catalog.connector_db()
+                segs.append(
+                    AttenuationSegment(
+                        kind="connector",
+                        db=db,
+                        description="patch to cross",
                         source="default",
                         wavelength_nm=self.wavelength,
                         meta={"connect_id": connect_id},
@@ -318,12 +418,13 @@ class Attenuation:
         length_m, length_source = self._fiber_length(fiber_id, fiber_obj)
 
         forced = self.catalog.forced_fiber_db_per_km(fiber_id)
-        cabletype_id = getattr(fiber_obj, "cablecode", None) or getattr(
-            fiber_obj, "cabletype_id", None
-        )
-        # cablecode в get_list — часто id типа кабеля; иначе cable_line_type_id
-        if cabletype_id is None and fiber_obj is not None:
-            cabletype_id = getattr(fiber_obj, "cable_line_type_id", None)
+        cabletype_id = None
+        if fiber_obj is not None:
+            cabletype_id = (
+                getattr(fiber_obj, "cablecode", None)
+                or getattr(fiber_obj, "cabletype_id", None)
+                or getattr(fiber_obj, "cable_line_type_id", None)
+            )
 
         if forced is not None:
             alpha = forced
@@ -371,37 +472,19 @@ class Attenuation:
         self, ua: dict, va: dict, direction: str
     ) -> List[AttenuationSegment]:
         """
-        Затухание сплиттера одинаково в обе стороны для данного порта:
-        downstream OLT→client и upstream client→OLT через тот же out-port.
-        Берём out-port (side с port_count логикой: port вершины).
+        dB порта OUT (side=2) — одинаково downstream и upstream.
         """
-        # выберем вершину-«выход» — та, у которой port относится к out
-        # эвристика: у 1xN side1=in, side2=out (как в builders); port на out
-        sp_attrs = ua if ua.get("obj_type") == TYPE_SPLITTER else va
-        other = va if sp_attrs is ua else ua
-
-        # порт вклада — порт исходящей стороны (не in)
-        out_attrs = sp_attrs
-        if other.get("obj_type") == TYPE_SPLITTER:
-            # оба splitter? не должно
-            out_attrs = other
-
-        # если идём через internal, обе вершины — один splitter, разные side/port
-        if (
-            ua.get("obj_type") == TYPE_SPLITTER
-            and va.get("obj_type") == TYPE_SPLITTER
-            and str(ua.get("obj_id")) == str(va.get("obj_id"))
-        ):
-            # берём вершину с большим side как out (типично side=2 out)
-            out_attrs = ua if int(ua.get("side", 1)) >= int(va.get("side", 1)) else va
-            if int(ua.get("side", 1)) == int(va.get("side", 1)):
-                out_attrs = ua if int(ua.get("port", 0)) >= int(va.get("port", 0)) else va
-
+        out_attrs = self._splitter_out_vertex(ua, va)
         splitter_id = out_attrs.get("obj_id")
         port = int(out_attrs.get("port") or 0)
+        side = int(out_attrs.get("side") or _SPLITTER_OUT_SIDE)
+
         splitter_obj = out_attrs.get("api_obj")
         if splitter_obj is None and self.cache is not None and self.client is not None:
-            splitter_obj = self.cache.get_splitter(self.client, int(splitter_id))
+            try:
+                splitter_obj = self.cache.get_splitter(self.client, int(splitter_id))
+            except Exception:
+                splitter_obj = None
 
         catalog_id = self._splitter_catalog_id(splitter_obj)
         pin = getattr(splitter_obj, "port_count_in", 0) or 0
@@ -425,19 +508,21 @@ class Attenuation:
                 kind="splitter",
                 db=db,
                 description=(
-                    f"splitter:{splitter_id} port={port} "
-                    f"({topology or '?'}) [{direction}]"
+                    f"splitter:{splitter_id} out port={port} "
+                    f"side={side} ({topology or '?'}) [{direction}]"
                 ),
                 obj_type=TYPE_SPLITTER,
                 obj_id=str(splitter_id),
                 port=port,
-                side=out_attrs.get("side"),
+                side=side,
                 wavelength_nm=self.wavelength,
                 source=source,
                 meta={
                     "catalog_id": catalog_id,
                     "topology": topology,
                     "direction": direction,
+                    "in_side": _SPLITTER_IN_SIDE,
+                    "out_side": _SPLITTER_OUT_SIDE,
                 },
             )
         ]
@@ -446,31 +531,18 @@ class Attenuation:
     # core path calculation
     # ------------------------------------------------------------------
 
-    def path(
+    def _report_from_vpath(
         self,
-        source: VertexRef,
-        target: VertexRef,
+        vpath: List[int],
         *,
         direction: Optional[str] = None,
     ) -> PathReport:
-        s = self.resolve_vertex(source)
-        t = self.resolve_vertex(target)
         report = PathReport(wavelength_nm=self.wavelength)
-
-        if s is None or t is None:
-            report.warnings.append(
-                f"vertex not found: source={source!r} target={target!r}"
-            )
-            return report
-
-        vpath = self.shortest_path(s, t)
         if not vpath:
-            report.warnings.append(f"no path between {s} and {t}")
-            report.from_label = _label_vertex(self._vertex_attrs(s))
-            report.to_label = _label_vertex(self._vertex_attrs(t))
+            report.warnings.append("empty path")
             return report
 
-        report.vertex_path = vpath
+        report.vertex_path = list(vpath)
         report.from_label = _label_vertex(self._vertex_attrs(vpath[0]))
         report.to_label = _label_vertex(self._vertex_attrs(vpath[-1]))
         report.direction = direction or self._direction_of_path(vpath)
@@ -489,6 +561,57 @@ class Attenuation:
                     f"splitter profile {seg.obj_id} port={seg.port}"
                 )
         return report
+
+    def path(
+        self,
+        source: VertexRef,
+        target: VertexRef,
+        *,
+        direction: Optional[str] = None,
+    ) -> PathReport:
+        s = self.resolve_vertex(source)
+        t = self.resolve_vertex(target)
+        if s is None or t is None:
+            report = PathReport(wavelength_nm=self.wavelength)
+            report.warnings.append(
+                f"vertex not found: source={source!r} target={target!r}"
+            )
+            return report
+
+        vpath = self.shortest_path(s, t)
+        if not vpath:
+            report = PathReport(wavelength_nm=self.wavelength)
+            report.warnings.append(f"no path between {s} and {t}")
+            report.from_label = _label_vertex(self._vertex_attrs(s))
+            report.to_label = _label_vertex(self._vertex_attrs(t))
+            return report
+        return self._report_from_vpath(vpath, direction=direction)
+
+    def along(
+        self,
+        vpath: Sequence[int],
+        *,
+        direction: Optional[str] = None,
+    ) -> PathReport:
+        """Расчёт по явному списку индексов вершин."""
+        return self._report_from_vpath(list(vpath), direction=direction)
+
+    def along_linear(
+        self,
+        *,
+        reverse: bool = False,
+        direction: Optional[str] = None,
+    ) -> PathReport:
+        """
+        Для CGraph после topology_from_commutation — обход по цепочке,
+        без shortest_path (устойчивее на линейных графах).
+        """
+        order = self.linear_vertex_order()
+        if reverse:
+            order = list(reversed(order))
+        if direction is None:
+            direction = self._direction_of_path(order)
+        return self._report_from_vpath(order, direction=direction)
 
     def path_db(self, source: VertexRef, target: VertexRef, **kw: Any) -> float:
         return self.path(source, target, **kw).total_db
@@ -545,7 +668,6 @@ class Attenuation:
         olt_id: Optional[Union[int, str]] = None,
     ) -> PathReport:
         r = self.olt_to_customer(customer_id, olt_id=olt_id)
-        # симметрия сплиттера: те же dB; направление помечаем upstream
         r.direction = "upstream"
         r.from_label, r.to_label = r.to_label, r.from_label
         r.vertex_path = list(reversed(r.vertex_path))
@@ -558,7 +680,7 @@ class Attenuation:
         port: int,
         *,
         olt_id: Optional[Union[int, str]] = None,
-        side: int = 2,
+        side: int = _SPLITTER_OUT_SIDE,
     ) -> PathReport:
         olt = (
             self.find_vertex(TYPE_OLT, olt_id)
@@ -567,7 +689,6 @@ class Attenuation:
         )
         sp = self.find_vertex(TYPE_SPLITTER, splitter_id, port=port, side=side)
         if sp is None:
-            # любая сторона с этим port
             sp = self.find_vertex(TYPE_SPLITTER, splitter_id, port=port)
         if olt is None or sp is None:
             r = PathReport(wavelength_nm=self.wavelength)
@@ -580,7 +701,7 @@ class Attenuation:
         splitter_id: Union[int, str],
         *,
         olt_id: Optional[Union[int, str]] = None,
-        side: int = 1,
+        side: int = _SPLITTER_IN_SIDE,
         port: int = 1,
     ) -> PathReport:
         olt = (
@@ -645,10 +766,11 @@ class Attenuation:
         from_ref: Optional[VertexRef] = None,
         prefer_types: Optional[Sequence[str]] = None,
     ) -> PathReport:
-        """
-        Путь от from_ref (или OLT) до первого интерфейса в сооружении node_id.
-        """
-        start = self.resolve_vertex(from_ref) if from_ref is not None else self.primary_olt()
+        start = (
+            self.resolve_vertex(from_ref)
+            if from_ref is not None
+            else self.primary_olt()
+        )
         if start is None:
             r = PathReport(wavelength_nm=self.wavelength)
             r.warnings.append("first_in_node: no start vertex")
@@ -672,7 +794,7 @@ class Attenuation:
             vpath = self.shortest_path(start, c)
             if vpath and len(vpath) < best_len:
                 best_len = len(vpath)
-                best = self.path(start, c)
+                best = self._report_from_vpath(vpath)
         if best is None:
             r = PathReport(wavelength_nm=self.wavelength)
             r.warnings.append(f"first_in_node: no vertex in node {node_id}")
@@ -687,7 +809,6 @@ class Attenuation:
         port: Optional[int] = None,
         side: Optional[int] = None,
     ) -> PathReport:
-        """От кросса до первой коммутации в указанном сооружении."""
         cr = self.find_vertex(TYPE_CROSS, cross_id, port=port, side=side)
         if cr is None:
             hits = self.find_vertices(TYPE_CROSS, cross_id)
@@ -704,7 +825,6 @@ class Attenuation:
         *,
         olt_id: Optional[Union[int, str]] = None,
     ) -> List[PathReport]:
-        """Затухание OLT→каждый абонент (или все в графе)."""
         if customer_ids is None:
             customer_ids = [
                 self.g.vs[i]["obj_id"] for i in self.find_customers()
@@ -714,11 +834,12 @@ class Attenuation:
         ]
 
     def worst_customer(
-        self, *,
+        self,
+        *,
         olt_id: Optional[Union[int, str]] = None,
     ) -> Optional[PathReport]:
         reports = self.budget_summary(olt_id=olt_id)
-        reports = [r for r in reports if not r.warnings or r.segments]
+        reports = [r for r in reports if r.segments]
         if not reports:
             return None
         return max(reports, key=lambda r: r.total_db)
