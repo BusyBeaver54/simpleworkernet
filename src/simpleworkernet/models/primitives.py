@@ -20,7 +20,6 @@ try:
 except ImportError:
     HAS_PYPROJ = False
 
-# Радиус сферы Web Mercator (EPSG:3857)
 _MERCATOR_RADIUS = 6378137.0
 
 
@@ -132,10 +131,7 @@ def _unproject_xy(
     raise ValueError(f"Неизвестная проекция: {projection!r}")
 
 
-def _rotate2d(
-    x: float, y: float, angle_deg: float
-) -> Tuple[float, float]:
-    """Поворот вокруг (0,0): положительный angle — против часовой (математический)."""
+def _rotate2d(x: float, y: float, angle_deg: float) -> Tuple[float, float]:
     if abs(angle_deg) < 1e-15:
         return x, y
     a = math.radians(angle_deg)
@@ -143,96 +139,85 @@ def _rotate2d(
     return x * c - y * s, x * s + y * c
 
 
+def _as_float(value: Any, name: str) -> float:
+    if value is None:
+        raise TypeError(f"GeoPoint.{name} не может быть None")
+    return float(value)
+
+
 @smart_model
 class GeoPoint(BaseModel):
     """
     Географические координаты WGS84 (широта, долгота) + проекции в плоские XY.
 
-    Инициализация:
-        GeoPoint(55.75, 37.62)
-        GeoPoint([55.75, 37.62]) / GeoPoint((55.75, 37.62))
-        GeoPoint("55.75,37.62")
-        GeoPoint(lat=55.75, lon=37.62)
-
-    Плоские координаты (метры):
-        pt.to_xy()                         # абсолютные UTM (нужен pyproj)
-        pt.to_xy(center=origin)            # локальные относительно origin
-        pt.to_xy(projection="mercator")    # без pyproj
-        GeoPoint.from_xy(x, y, center=origin)
-
-    Наклон относительно карты в AutoCAD
-    -------------------------------------
-    Часто объекты «чуть повёрнуты» относительно подложки карты. Типичные причины:
-
-    1. **Схождение меридианов (grid north ≠ true north)**.
-       В UTM оси параллельны центральному меридиану зоны, а не географическому
-       северу в точке. Угол γ ≈ (λ − λ₀)·sin(φ). Чем дальше от центра зоны и
-       чем севернее — тем заметнее. На карте с ориентацией «вверх = север»
-       UTM-локальная система выглядит наклонённой.
-       Решение: ``to_xy(..., correct_grid_north=True)`` — поворот на −γ
-       вокруг центра, чтобы ось Y совпала с истинным севером.
-
-    2. **Разная CRS у точек и подложки** (UTM-точки на Web Mercator / гео-карте).
-
-    3. **Project / plant north** в чертеже (локальный поворот стройплощадки).
-
-    4. **Оси**: UTM даёт (Easting, Northing) = (X, Y). В CAD иногда путают
-       X/Y или «север вверх» с «север = −Y».
-
-    5. Масштаб UTM (k₀=0.9996) и отсутствие единой точки привязки (center).
+    pt.to_xy(center=origin, projection="utm" | "mercator")
+    GeoPoint.from_xy(x, y, center=origin)
     """
 
     lat: float
     lon: float
 
     def __init__(self, *args, **kwargs):
+        lat: Any = None
+        lon: Any = None
+
         if len(args) == 1:
             arg = args[0]
-            if isinstance(arg, Sequence) and not isinstance(arg, (str, bytes)) and len(arg) == 2:
-                super().__init__(lat=float(arg[0]), lon=float(arg[1]))
-                self._validate()
-                return
-            if isinstance(arg, str):
-                parts = [p.strip() for p in arg.replace(";", ",").split(",")]
-                if len(parts) == 2:
-                    super().__init__(lat=float(parts[0]), lon=float(parts[1]))
-                    self._validate()
-                    return
-            if isinstance(arg, dict):
+            if isinstance(arg, GeoPoint):
+                lat, lon = arg.lat, arg.lon
+            elif isinstance(arg, Sequence) and not isinstance(arg, (str, bytes)) and len(arg) >= 2:
+                lat, lon = arg[0], arg[1]
+            elif isinstance(arg, str):
+                parts = [p.strip() for p in arg.replace(";", ",").replace(" ", ",").split(",") if p.strip()]
+                if len(parts) >= 2:
+                    lat, lon = parts[0], parts[1]
+                else:
+                    raise ValueError(f"Не удалось разобрать координаты: {arg!r}")
+            elif isinstance(arg, dict):
                 lat = arg.get("lat", arg.get("latitude"))
                 lon = arg.get("lon", arg.get("longitude"))
-                super().__init__(lat=float(lat), lon=float(lon))
-                self._validate()
-                return
-        if len(args) == 2:
-            super().__init__(lat=float(args[0]), lon=float(args[1]))
-            self._validate()
-            return
-        super().__init__(*args, **kwargs)
+            else:
+                raise TypeError(f"Неподдерживаемый тип для GeoPoint: {type(arg)!r}")
+        elif len(args) >= 2:
+            lat, lon = args[0], args[1]
+        else:
+            lat = kwargs.get("lat", kwargs.get("latitude"))
+            lon = kwargs.get("lon", kwargs.get("longitude"))
+
+        # BaseModel может вернуть None через __getattr__ — задаём явно
+        super().__init__(lat=_as_float(lat, "lat"), lon=_as_float(lon, "lon"))
         self._validate()
 
     def _validate(self) -> None:
-        if not -90 <= self.lat <= 90:
-            log.warning(f"Широта {self.lat} вне [-90, 90]")
-        if not -180 <= self.lon <= 180:
-            log.warning(f"Долгота {self.lon} вне [-180, 180]")
-
-    # --- базовые представления ---
+        lat = getattr(self, "lat", None)
+        lon = getattr(self, "lon", None)
+        if lat is None or lon is None:
+            log.warning("GeoPoint без lat/lon — пропуск проверки диапазона")
+            return
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            log.warning(f"GeoPoint: нечисловые координаты lat={lat!r} lon={lon!r}")
+            return
+        if not (-90.0 <= lat_f <= 90.0):
+            log.warning(f"Широта {lat_f} вне [-90, 90]")
+        if not (-180.0 <= lon_f <= 180.0):
+            log.warning(f"Долгота {lon_f} вне [-180, 180]")
 
     def to_tuple(self) -> Tuple[float, float]:
-        return (self.lat, self.lon)
+        return (float(self.lat), float(self.lon))
 
     def to_list(self) -> List[float]:
-        return [self.lat, self.lon]
+        return [float(self.lat), float(self.lon)]
 
     def to_dict(self) -> dict:
-        return {"lat": self.lat, "lon": self.lon}
+        return {"lat": float(self.lat), "lon": float(self.lon)}
 
     def distance_to(self, other: "GeoPoint") -> float:
-        """Расстояние по гаверсинусу, км."""
         R = 6371.0
-        lat1, lon1 = math.radians(self.lat), math.radians(self.lon)
-        lat2, lon2 = math.radians(other.lat), math.radians(other.lon)
+        lat1, lon1 = math.radians(float(self.lat)), math.radians(float(self.lon))
+        lat2, lon2 = math.radians(float(other.lat)), math.radians(float(other.lon))
         dlat, dlon = lat2 - lat1, lon2 - lon1
         a = (
             math.sin(dlat / 2) ** 2
@@ -240,22 +225,14 @@ class GeoPoint(BaseModel):
         )
         return R * 2 * math.asin(math.sqrt(a))
 
-    # --- UTM / проекции ---
-
     @property
     def utm_zone(self) -> int:
-        return _utm_zone(self.lon)
+        return _utm_zone(float(self.lon))
 
     def meridian_convergence(self) -> float:
-        """
-        Приближённый угол схождения меридианов γ (градусы).
-
-        γ ≈ (λ − λ₀) · sin(φ), где λ₀ — центральный меридиан UTM-зоны.
-        Положительный γ: grid north восточнее true north.
-        """
         zone = self.utm_zone
         lam0 = _utm_central_meridian(zone)
-        return (self.lon - lam0) * math.sin(math.radians(self.lat))
+        return (float(self.lon) - lam0) * math.sin(math.radians(float(self.lat)))
 
     def to_xy(
         self,
@@ -269,24 +246,6 @@ class GeoPoint(BaseModel):
         correct_grid_north: bool = False,
         rotation_deg: float = 0.0,
     ) -> Tuple[float, float]:
-        """
-        WGS84 → плоские (x, y) в метрах.
-
-        Args:
-            center: точка привязки (GeoPoint / (lat,lon) / …). Если задана и
-                absolute=False — результат относительно center.
-            projection: ``"utm"`` (pyproj) или ``"mercator"``.
-            scale / offset: масштаб и смещение после проекции.
-            absolute: игнорировать центрирование даже при заданном center.
-            auto_scale_mercator: 1/cos(φ) для mercator при центрировании.
-            correct_grid_north: повернуть локальные координаты на −γ
-                (выравнивание оси Y с истинным севером — для CAD/карты).
-            rotation_deg: дополнительный поворот (°, против часовой),
-                например project north.
-
-        Returns:
-            (x, y) — для UTM это (easting, northing) или смещения от center.
-        """
         c = GeoPoint(center) if center is not None else None
 
         eff_scale = scale
@@ -296,21 +255,28 @@ class GeoPoint(BaseModel):
             and projection == "mercator"
             and auto_scale_mercator
         ):
-            eff_scale = scale / math.cos(math.radians(c.lat))
+            eff_scale = scale / math.cos(math.radians(float(c.lat)))
 
         x, y = _project_latlon(
-            self.lat, self.lon, projection=projection, scale=eff_scale, offset=offset
+            float(self.lat),
+            float(self.lon),
+            projection=projection,
+            scale=eff_scale,
+            offset=offset,
         )
 
         if c is not None and not absolute:
             cx, cy = _project_latlon(
-                c.lat, c.lon, projection=projection, scale=eff_scale, offset=offset
+                float(c.lat),
+                float(c.lon),
+                projection=projection,
+                scale=eff_scale,
+                offset=offset,
             )
             x, y = x - cx, y - cy
 
             rot = rotation_deg
             if correct_grid_north and projection == "utm":
-                # Выровнять локальную систему с true north
                 rot = rot - c.meridian_convergence()
             x, y = _rotate2d(x, y, rot)
         elif rotation_deg:
@@ -341,11 +307,7 @@ class GeoPoint(BaseModel):
             correct_grid_north=correct_grid_north,
             rotation_deg=rotation_deg,
         )
-        z_out = z * scale + offset[2]
-        if center is not None and not absolute:
-            # z относительно центра не вычитаем, если у center нет высоты
-            pass
-        return float(x), float(y), float(z_out)
+        return float(x), float(y), float(z) * scale + offset[2]
 
     @classmethod
     def from_xy(
@@ -360,11 +322,6 @@ class GeoPoint(BaseModel):
         correct_grid_north: bool = False,
         rotation_deg: float = 0.0,
     ) -> "GeoPoint":
-        """
-        Плоские (x, y) относительно center → GeoPoint.
-
-        Параметры correct_grid_north / rotation_deg должны совпадать с to_xy.
-        """
         c = cls(center)
         dx, dy = float(x), float(y)
 
@@ -374,13 +331,17 @@ class GeoPoint(BaseModel):
         dx, dy = _rotate2d(dx, dy, rot)
 
         cx, cy = _project_latlon(
-            c.lat, c.lon, projection=projection, scale=scale, offset=offset
+            float(c.lat),
+            float(c.lon),
+            projection=projection,
+            scale=scale,
+            offset=offset,
         )
         lat, lon = _unproject_xy(
             cx + dx,
             cy + dy,
-            ref_lat=c.lat,
-            ref_lon=c.lon,
+            ref_lat=float(c.lat),
+            ref_lon=float(c.lon),
             projection=projection,
             scale=scale,
             offset=offset,
@@ -395,18 +356,17 @@ class GeoPoint(BaseModel):
 
     def __eq__(self, other: Any) -> bool:
         if isinstance(other, GeoPoint):
-            return abs(self.lat - other.lat) < 1e-10 and abs(self.lon - other.lon) < 1e-10
+            try:
+                return abs(float(self.lat) - float(other.lat)) < 1e-10 and abs(
+                    float(self.lon) - float(other.lon)
+                ) < 1e-10
+            except (TypeError, ValueError):
+                return False
         return False
 
 
 class GeoPointArray:
-    """
-    Список GeoPoint с пакетными проекциями.
-
-    >>> arr = GeoPointArray([(55.75, 37.62), (55.76, 37.63)])
-    >>> arr.to_xy(center=arr.center())
-    >>> GeoPointArray.from_xy([[0, 0], [100, 50]], center=origin)
-    """
+    """Список GeoPoint с пакетными проекциями."""
 
     def __init__(self, points: Optional[Iterable[Any]] = None):
         self._points: List[GeoPoint] = []
@@ -437,13 +397,12 @@ class GeoPointArray:
         return list(self._points)
 
     def center(self) -> GeoPoint:
-        """Среднее арифметическое lat/lon (достаточно для локальной привязки)."""
         if not self._points:
             raise ValueError("Пустой GeoPointArray")
         n = len(self._points)
         return GeoPoint(
-            sum(p.lat for p in self._points) / n,
-            sum(p.lon for p in self._points) / n,
+            sum(float(p.lat) for p in self._points) / n,
+            sum(float(p.lon) for p in self._points) / n,
         )
 
     def to_xy(
@@ -523,11 +482,10 @@ class GeoPointArray:
         return cls(pts)
 
     def bounds(self) -> Tuple[GeoPoint, GeoPoint]:
-        """(юго-запад, северо-восток) по lat/lon."""
         if not self._points:
             raise ValueError("Пустой GeoPointArray")
-        lats = [p.lat for p in self._points]
-        lons = [p.lon for p in self._points]
+        lats = [float(p.lat) for p in self._points]
+        lons = [float(p.lon) for p in self._points]
         return GeoPoint(min(lats), min(lons)), GeoPoint(max(lats), max(lons))
 
 
