@@ -60,6 +60,10 @@ class Attenuation:
         self.cache = cache if cache is not None else getattr(cgraph, "cache", None)
         self.client = client if client is not None else getattr(cgraph, "client", None)
 
+    # ------------------------------------------------------------------
+    # vertex resolution
+    # ------------------------------------------------------------------
+
     def _vertex_attrs(self, idx: int) -> dict:
         v = self.g.vs[idx]
         return {k: v[k] for k in v.attributes()}
@@ -128,6 +132,10 @@ class Attenuation:
         olts = self.find_olts()
         return olts[0] if olts else None
 
+    # ------------------------------------------------------------------
+    # path finding
+    # ------------------------------------------------------------------
+
     def shortest_path(self, source: int, target: int) -> List[int]:
         try:
             path = self.g.get_shortest_paths(source, to=target, output="vpath")
@@ -138,6 +146,12 @@ class Attenuation:
         return []
 
     def linear_vertex_order(self) -> List[int]:
+        """
+        Порядок вершин линейного CGraph (после topology_from_commutation).
+
+        Идём от конечной степени-1 вершины (customer/OLT) по единственному
+        соседу, не возвращаясь назад.
+        """
         n = self.g.vcount()
         if n == 0:
             return []
@@ -147,12 +161,14 @@ class Attenuation:
         degrees = self.g.degree()
         ends = [i for i, d in enumerate(degrees) if d == 1]
         if not ends:
+            # цикл или плотный — fallback: shortest OLT→customer
             olt = self.primary_olt()
             custs = self.find_customers()
             if olt is not None and custs:
                 return self.shortest_path(olt, custs[0])
             return list(range(n))
 
+        # предпочтительно старт с OLT, иначе customer, иначе любой конец
         start = ends[0]
         for i in ends:
             t = self.g.vs[i]["obj_type"]
@@ -194,8 +210,19 @@ class Attenuation:
             return "upstream" if types[0] == TYPE_CUSTOMER else "downstream"
         return "unknown"
 
+    # ------------------------------------------------------------------
+    # splitter side helpers (handlers: side1 ↔ side2)
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _splitter_out_vertex(ua: dict, va: dict) -> dict:
+        """
+        На internal-ребре сплиттера выбираем OUT-вершину.
+
+        Handlers: side=1 (IN) полностью связан с side=2 (OUT).
+        Затухание порта = порт OUT-стороны (side 2).
+        Если стороны перепутаны в данных — берём сторону с большим side.
+        """
         if (
             ua.get("obj_type") == TYPE_SPLITTER
             and va.get("obj_type") == TYPE_SPLITTER
@@ -206,6 +233,7 @@ class Attenuation:
                 return ua
             if vs_ == _SPLITTER_OUT_SIDE and us == _SPLITTER_IN_SIDE:
                 return va
+            # обе out или обе in — по большему side, затем port
             if us != vs_:
                 return ua if us > vs_ else va
             return ua if int(ua.get("port", 0)) >= int(va.get("port", 0)) else va
@@ -213,6 +241,10 @@ class Attenuation:
         if ua.get("obj_type") == TYPE_SPLITTER:
             return ua
         return va
+
+    # ------------------------------------------------------------------
+    # segment contribution
+    # ------------------------------------------------------------------
 
     def _fiber_length(
         self, fiber_id: Union[int, str], fiber_obj: Any
@@ -288,6 +320,7 @@ class Attenuation:
             )
             return segs
 
+        # --- fiber internal span (FiberHandler: opposite sides, is_internal) ---
         if (
             ua.get("obj_type") == TYPE_FIBER
             and va.get("obj_type") == TYPE_FIBER
@@ -297,6 +330,7 @@ class Attenuation:
             segs.extend(self._fiber_segments(ua))
             return segs
 
+        # --- splitter internal IN↔OUT (SplitterCwdmHandler) ---
         if is_internal and (
             ua.get("obj_type") == TYPE_SPLITTER
             and va.get("obj_type") == TYPE_SPLITTER
@@ -305,6 +339,7 @@ class Attenuation:
             segs.extend(self._splitter_segments(ua, va, direction))
             return segs
 
+        # --- cross internal adapter (CrossHandler: side1↔side2, is_internal) ---
         if is_internal and (
             ua.get("obj_type") == TYPE_CROSS
             and va.get("obj_type") == TYPE_CROSS
@@ -328,7 +363,10 @@ class Attenuation:
             )
             return segs
 
+        # --- external hop ---
         if not is_internal:
+            # стык к кроссу снаружи — уже учтён internal adapter;
+            # здесь: splice/connector на внешнем ребре
             kinds = {ua.get("obj_type"), va.get("obj_type")}
             if TYPE_FIBER in kinds:
                 db = self.catalog.splice_db()
@@ -343,6 +381,7 @@ class Attenuation:
                     )
                 )
             elif TYPE_CROSS not in kinds:
+                # не дублируем adapter, если один конец — cross (internal уже дал)
                 db = self.catalog.connector_db()
                 segs.append(
                     AttenuationSegment(
@@ -355,6 +394,7 @@ class Attenuation:
                     )
                 )
             else:
+                # external к кроссу: лёгкий connector (патч)
                 db = self.catalog.connector_db()
                 segs.append(
                     AttenuationSegment(
@@ -431,6 +471,9 @@ class Attenuation:
     def _splitter_segments(
         self, ua: dict, va: dict, direction: str
     ) -> List[AttenuationSegment]:
+        """
+        dB порта OUT (side=2) — одинаково downstream и upstream.
+        """
         out_attrs = self._splitter_out_vertex(ua, va)
         splitter_id = out_attrs.get("obj_id")
         port = int(out_attrs.get("port") or 0)
@@ -483,6 +526,10 @@ class Attenuation:
                 },
             )
         ]
+
+    # ------------------------------------------------------------------
+    # core path calculation
+    # ------------------------------------------------------------------
 
     def _report_from_vpath(
         self,
@@ -546,6 +593,7 @@ class Attenuation:
         *,
         direction: Optional[str] = None,
     ) -> PathReport:
+        """Расчёт по явному списку индексов вершин."""
         return self._report_from_vpath(list(vpath), direction=direction)
 
     def along_linear(
@@ -554,6 +602,10 @@ class Attenuation:
         reverse: bool = False,
         direction: Optional[str] = None,
     ) -> PathReport:
+        """
+        Для CGraph после topology_from_commutation — обход по цепочке,
+        без shortest_path (устойчивее на линейных графах).
+        """
         order = self.linear_vertex_order()
         if reverse:
             order = list(reversed(order))
@@ -563,6 +615,10 @@ class Attenuation:
 
     def path_db(self, source: VertexRef, target: VertexRef, **kw: Any) -> float:
         return self.path(source, target, **kw).total_db
+
+    # ------------------------------------------------------------------
+    # convenience queries
+    # ------------------------------------------------------------------
 
     def between(
         self,
