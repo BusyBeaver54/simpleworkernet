@@ -167,12 +167,19 @@ def _effective_scale(
     center_lat: Optional[float],
     auto_scale_mercator: bool,
 ) -> float:
+    """
+    Web Mercator overstates ground distances by 1/cos(φ).
+
+    To obtain approximate true metres near ``center_lat``, multiply by
+    cos(φ).  Division (the previous bug) inflated distances by ~1.7–2×
+    at mid-latitudes (~55°).
+    """
     if (
         projection == "mercator"
         and auto_scale_mercator
         and center_lat is not None
     ):
-        return scale / math.cos(math.radians(float(center_lat)))
+        return scale * math.cos(math.radians(float(center_lat)))
     return scale
 
 
