@@ -23,6 +23,9 @@ except ImportError:
 _MERCATOR_RADIUS = 6378137.0
 _EARTH_RADIUS = 6378137.0
 
+# Default planar projection for to_xy / from_xy / GeoPointArray.
+DEFAULT_PROJECTION = "mercator"
+
 
 class vStr(str):
     def __new__(cls, value: Any) -> "vStr":
@@ -94,6 +97,25 @@ def _local_en_inverse(x: float, y: float, lat0: float, lon0: float) -> Tuple[flo
     return lat, lon
 
 
+def _mercator_raw(lat: float, lon: float) -> Tuple[float, float]:
+    """Spherical Web Mercator (EPSG:3857-like), metres, no scale correction."""
+    lat_rad = math.radians(lat)
+    lon_rad = math.radians(lon)
+    # clamp for numerical stability near poles
+    lat_rad = max(min(lat_rad, math.radians(85.05112878)), math.radians(-85.05112878))
+    x = _MERCATOR_RADIUS * lon_rad
+    y = _MERCATOR_RADIUS * math.log(math.tan(math.pi / 4.0 + lat_rad / 2.0))
+    return x, y
+
+
+def _mercator_raw_inverse(x: float, y: float) -> Tuple[float, float]:
+    lon = (x / _MERCATOR_RADIUS) * 180.0 / math.pi
+    lat = (
+        2.0 * math.atan(math.exp(y / _MERCATOR_RADIUS)) - math.pi / 2.0
+    ) * 180.0 / math.pi
+    return float(lat), float(lon)
+
+
 def _project_latlon(
     lat: float,
     lon: float,
@@ -111,9 +133,7 @@ def _project_latlon(
     elif projection == "utm":
         x, y = _get_utm_transformer(lat, lon).transform(lon, lat)
     elif projection == "mercator":
-        lat_rad, lon_rad = math.radians(lat), math.radians(lon)
-        x = _MERCATOR_RADIUS * lon_rad
-        y = _MERCATOR_RADIUS * math.log(math.tan(math.pi / 4 + lat_rad / 2))
+        x, y = _mercator_raw(lat, lon)
     else:
         raise ValueError(f"Неизвестная проекция: {projection!r} (local|utm|mercator)")
     return x * scale + offset[0], y * scale + offset[1]
@@ -139,11 +159,7 @@ def _unproject_xy(
         )
         return float(lat), float(lon)
     if projection == "mercator":
-        lon = (mx / _MERCATOR_RADIUS) * 180.0 / math.pi
-        lat = (
-            2.0 * math.atan(math.exp(my / _MERCATOR_RADIUS)) - math.pi / 2.0
-        ) * 180.0 / math.pi
-        return float(lat), float(lon)
+        return _mercator_raw_inverse(mx, my)
     raise ValueError(f"Неизвестная проекция: {projection!r}")
 
 
@@ -161,26 +177,15 @@ def _as_float(value: Any, name: str) -> float:
     return float(value)
 
 
-def _effective_scale(
-    scale: float,
-    projection: str,
-    center_lat: Optional[float],
-    auto_scale_mercator: bool,
-) -> float:
+def _mercator_metric_scale(center_lat: float) -> float:
     """
-    Web Mercator overstates ground distances by 1/cos(φ).
+    Web Mercator overstates ground distances by sec(φ) = 1/cos(φ).
 
-    To obtain approximate true metres near ``center_lat``, multiply by
-    cos(φ).  Division (the previous bug) inflated distances by ~1.7–2×
-    at mid-latitudes (~55°).
+    Multiply *relative* mercator deltas by cos(center_lat) to get
+    approximate true metres near the origin (matches local ENU on
+    sphere R=6378137 within ~0.01 % on sub-km baselines).
     """
-    if (
-        projection == "mercator"
-        and auto_scale_mercator
-        and center_lat is not None
-    ):
-        return scale * math.cos(math.radians(float(center_lat)))
-    return scale
+    return math.cos(math.radians(float(center_lat)))
 
 
 @smart_model
@@ -188,7 +193,9 @@ class GeoPoint(BaseModel):
     """
     WGS84 + проекции в плоские XY (метры).
 
-    По умолчанию projection="local" (East/North, Y = истинный север).
+    По умолчанию projection="mercator" (Web Mercator).
+    При center + auto_scale_mercator=True относительные координаты
+    масштабируются на cos(lat), чтобы метры ≈ истинным на местности.
     """
 
     lat: float
@@ -252,6 +259,7 @@ class GeoPoint(BaseModel):
         return {"lat": float(self.lat), "lon": float(self.lon)}
 
     def distance_to(self, other: "GeoPoint") -> float:
+        """Haversine distance in kilometres (mean Earth radius 6371 km)."""
         R = 6371.0
         lat1, lon1 = math.radians(float(self.lat)), math.radians(float(self.lon))
         lat2, lon2 = math.radians(float(other.lat)), math.radians(float(other.lon))
@@ -274,7 +282,7 @@ class GeoPoint(BaseModel):
         self,
         center: Optional[Any] = None,
         *,
-        projection: str = "local",
+        projection: str = DEFAULT_PROJECTION,
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
         absolute: bool = False,
@@ -282,7 +290,8 @@ class GeoPoint(BaseModel):
         correct_grid_north: Optional[bool] = None,
         rotation_deg: float = 0.0,
     ) -> Tuple[float, float]:
-        if projection == "local" and center is None:
+        # Relative mode needs an origin; default to self so a single point → (0, 0).
+        if center is None and not absolute:
             center = self
 
         c = GeoPoint(center) if center is not None else None
@@ -293,19 +302,12 @@ class GeoPoint(BaseModel):
         origin_lat = float(c.lat) if c is not None else None
         origin_lon = float(c.lon) if c is not None else None
 
-        eff_scale = _effective_scale(
-            scale,
-            projection,
-            origin_lat if (c is not None and not absolute) else None,
-            auto_scale_mercator,
-        )
-
         if projection == "local":
             x, y = _project_latlon(
                 float(self.lat),
                 float(self.lon),
                 projection="local",
-                scale=eff_scale,
+                scale=scale,
                 offset=offset,
                 origin_lat=origin_lat,
                 origin_lon=origin_lon,
@@ -314,11 +316,29 @@ class GeoPoint(BaseModel):
                 x, y = _rotate2d(x, y, rotation_deg)
             return float(x), float(y)
 
+        # --- mercator / utm ---
+        # Metric correction for mercator is applied to the *relative* vector
+        # (raw delta × cos(lat0)), not by scaling absolute coordinates.
+        # That keeps the origin exact and avoids fictitious translation.
+        if projection == "mercator" and c is not None and not absolute:
+            x, y = _mercator_raw(float(self.lat), float(self.lon))
+            cx, cy = _mercator_raw(float(c.lat), float(c.lon))
+            dx, dy = x - cx, y - cy
+            if auto_scale_mercator:
+                k = _mercator_metric_scale(float(c.lat))
+                dx, dy = dx * k, dy * k
+            dx = dx * scale + offset[0]
+            dy = dy * scale + offset[1]
+            if rotation_deg:
+                dx, dy = _rotate2d(dx, dy, rotation_deg)
+            return float(dx), float(dy)
+
+        # absolute mercator, or utm (any)
         x, y = _project_latlon(
             float(self.lat),
             float(self.lon),
             projection=projection,
-            scale=eff_scale,
+            scale=scale,
             offset=offset,
         )
 
@@ -327,7 +347,7 @@ class GeoPoint(BaseModel):
                 float(c.lat),
                 float(c.lon),
                 projection=projection,
-                scale=eff_scale,
+                scale=scale,
                 offset=offset,
             )
             x, y = x - cx, y - cy
@@ -345,7 +365,7 @@ class GeoPoint(BaseModel):
         center: Optional[Any] = None,
         *,
         z: float = 0.0,
-        projection: str = "local",
+        projection: str = DEFAULT_PROJECTION,
         scale: float = 1.0,
         offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         absolute: bool = False,
@@ -372,7 +392,7 @@ class GeoPoint(BaseModel):
         y: float,
         center: Any,
         *,
-        projection: str = "local",
+        projection: str = DEFAULT_PROJECTION,
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
         auto_scale_mercator: bool = True,
@@ -385,19 +405,29 @@ class GeoPoint(BaseModel):
         if correct_grid_north is None:
             correct_grid_north = projection == "utm"
 
-        eff_scale = _effective_scale(
-            scale, projection, float(c.lat), auto_scale_mercator
-        )
-
         if projection == "local":
             dx, dy = _rotate2d(dx, dy, -rotation_deg)
-            mx = (dx - offset[0]) / eff_scale
-            my = (dy - offset[1]) / eff_scale
+            mx = (dx - offset[0]) / scale
+            my = (dy - offset[1]) / scale
             lat, lon = _local_en_inverse(mx, my, float(c.lat), float(c.lon))
             return cls(lat, lon)
 
+        if projection == "mercator":
+            dx, dy = _rotate2d(dx, dy, -rotation_deg)
+            dx = (dx - offset[0]) / scale
+            dy = (dy - offset[1]) / scale
+            if auto_scale_mercator:
+                k = _mercator_metric_scale(float(c.lat))
+                if abs(k) < 1e-15:
+                    raise ValueError("mercator metric scale ~ 0 near the pole")
+                dx, dy = dx / k, dy / k
+            cx, cy = _mercator_raw(float(c.lat), float(c.lon))
+            lat, lon = _mercator_raw_inverse(cx + dx, cy + dy)
+            return cls(lat, lon)
+
+        # utm
         rot = -rotation_deg
-        if correct_grid_north and projection == "utm":
+        if correct_grid_north:
             rot = rot + c.meridian_convergence()
         dx, dy = _rotate2d(dx, dy, rot)
 
@@ -405,7 +435,7 @@ class GeoPoint(BaseModel):
             float(c.lat),
             float(c.lon),
             projection=projection,
-            scale=eff_scale,
+            scale=scale,
             offset=offset,
         )
         lat, lon = _unproject_xy(
@@ -414,7 +444,7 @@ class GeoPoint(BaseModel):
             ref_lat=float(c.lat),
             ref_lon=float(c.lon),
             projection=projection,
-            scale=eff_scale,
+            scale=scale,
             offset=offset,
         )
         return cls(lat, lon)
@@ -478,7 +508,7 @@ class GeoPointArray:
         self,
         center: Optional[Any] = None,
         *,
-        projection: str = "local",
+        projection: str = DEFAULT_PROJECTION,
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
         absolute: bool = False,
@@ -509,7 +539,7 @@ class GeoPointArray:
         *,
         zs: Optional[Sequence[float]] = None,
         default_z: float = 0.0,
-        projection: str = "local",
+        projection: str = DEFAULT_PROJECTION,
         scale: float = 1.0,
         offset: Tuple[float, float, float] = (0.0, 0.0, 0.0),
         **kwargs,
@@ -529,7 +559,7 @@ class GeoPointArray:
         xy_list: Sequence[Sequence[float]],
         center: Any,
         *,
-        projection: str = "local",
+        projection: str = DEFAULT_PROJECTION,
         scale: float = 1.0,
         offset: Tuple[float, float] = (0.0, 0.0),
         auto_scale_mercator: bool = True,
@@ -823,6 +853,7 @@ __all__ = [
     "GeoPoint",
     "GeoPointArray",
     "HAS_PYPROJ",
+    "DEFAULT_PROJECTION",
     "vPhoneNumber",
     "vINN",
     "vKPP",
