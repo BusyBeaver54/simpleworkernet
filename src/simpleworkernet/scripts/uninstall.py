@@ -26,7 +26,7 @@ CleanupMode = Literal['all', 'logs', 'cache', 'config']
 def get_simpleworkernet_root_dirs() -> Dict[str, Path]:
     """Возвращает корневые директории SimpleWorkerNet для разных ОС."""
     dirs = {}
-    
+
     if sys.platform == 'win32':
         app_data = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
         local_app_data = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
@@ -38,24 +38,46 @@ def get_simpleworkernet_root_dirs() -> Dict[str, Path]:
         dirs['cache_root'] = Path.home() / 'Library' / 'Caches' / 'simpleworkernet'
         dirs['logs_root'] = Path.home() / 'Library' / 'Logs' / 'simpleworkernet'
     else:
+        # Linux / XDG: logs live under ~/.local/share/simpleworkernet/<app>/logs
+        # (must match get_app_logs_dir in core/config.py)
         dirs['config_root'] = Path.home() / '.config' / 'simpleworkernet'
         dirs['cache_root'] = Path.home() / '.cache' / 'simpleworkernet'
-        dirs['logs_root'] = Path.home() / '.local' / 'share' / 'simpleworkernet' / 'logs'
-    
+        dirs['logs_root'] = Path.home() / '.local' / 'share' / 'simpleworkernet'
+
     return dirs
 
 
 def disable_cache_in_config(config_path: Path) -> bool:
-    """Отключает кэширование в конфигурационном файле."""
+    """Отключает кэширование в конфигурационном файле.
+
+    Поддерживает:
+    - nested: config['cache']['enabled']  (текущий формат WorkerNetConfig)
+    - legacy:  config['cache_enabled']
+    """
     if not config_path.exists():
         return False
-    
+
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        
-        if config.get('cache_enabled', True):
-            config['cache_enabled'] = False
+
+        changed = False
+
+        # Nested structure (current)
+        if isinstance(config.get('cache'), dict) and config['cache'].get('enabled', True):
+            config['cache']['enabled'] = False
+            changed = True
+
+        # Legacy top-level key
+        if config.get('cache_enabled', False) is True or (
+            'cache_enabled' in config and config.get('cache_enabled') is not False
+            and not isinstance(config.get('cache'), dict)
+        ):
+            if config.get('cache_enabled', True):
+                config['cache_enabled'] = False
+                changed = True
+
+        if changed:
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             return True
@@ -68,10 +90,10 @@ def disable_cache_for_all_apps() -> List[str]:
     """Отключает кэширование во всех найденных конфигурациях приложений."""
     roots = get_simpleworkernet_root_dirs()
     modified_apps = []
-    
+
     if not roots['config_root'].exists():
         return modified_apps
-    
+
     try:
         for app_dir in roots['config_root'].iterdir():
             if app_dir.is_dir():
@@ -80,7 +102,7 @@ def disable_cache_for_all_apps() -> List[str]:
                     modified_apps.append(app_dir.name)
     except Exception:
         pass
-    
+
     return modified_apps
 
 
@@ -88,7 +110,7 @@ def find_cache_files(cache_root: Path) -> List[Path]:
     """Рекурсивно находит все файлы кэша (*.pkl) в директории."""
     if not cache_root.exists():
         return []
-    
+
     cache_files = []
     try:
         for root, dirs, files in os.walk(str(cache_root)):
@@ -97,7 +119,7 @@ def find_cache_files(cache_root: Path) -> List[Path]:
                     cache_files.append(Path(root) / file)
     except Exception:
         pass
-    
+
     return cache_files
 
 
@@ -105,7 +127,7 @@ def list_applications() -> List[str]:
     """Возвращает список всех установленных приложений."""
     roots = get_simpleworkernet_root_dirs()
     apps: Set[str] = set()
-    
+
     # Сканируем директории конфигурации
     if roots['config_root'].exists():
         try:
@@ -114,7 +136,7 @@ def list_applications() -> List[str]:
                     apps.add(item.name)
         except Exception:
             pass
-    
+
     # Сканируем директории кэша
     if roots['cache_root'].exists():
         try:
@@ -123,28 +145,27 @@ def list_applications() -> List[str]:
                     apps.add(item.name)
         except Exception:
             pass
-    
-    # Сканируем директории логов
+
+    # Сканируем директории логов: logs_root/<app>/logs
     if roots['logs_root'].exists():
         try:
             for item in roots['logs_root'].iterdir():
                 if item.is_dir() and not item.name.startswith('.'):
-                    if item.name != 'logs':
-                        apps.add(item.name)
+                    apps.add(item.name)
         except Exception:
             pass
-    
+
     return sorted(list(apps))
 
 
 def get_app_info(app_name: str) -> Dict[str, Any]:
     """Возвращает информацию о приложении."""
     roots = get_simpleworkernet_root_dirs()
-    
+
     app_config_dir = roots['config_root'] / app_name
     app_cache_dir = roots['cache_root'] / app_name
     app_logs_dir = roots['logs_root'] / app_name / 'logs'
-    
+
     info = {
         'name': app_name,
         'has_config': False,
@@ -159,7 +180,7 @@ def get_app_info(app_name: str) -> Dict[str, Any]:
         'cache_files': [],
         'cache_enabled': True
     }
-    
+
     if app_config_dir.exists():
         try:
             info['has_config'] = True
@@ -169,10 +190,14 @@ def get_app_info(app_name: str) -> Dict[str, Any]:
             if config_file.exists():
                 with open(config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
+                # Nested (current) or legacy top-level
+                if isinstance(config.get('cache'), dict):
+                    info['cache_enabled'] = config['cache'].get('enabled', True)
+                else:
                     info['cache_enabled'] = config.get('cache_enabled', True)
         except Exception:
             pass
-    
+
     if app_cache_dir.exists():
         try:
             info['has_cache'] = True
@@ -181,7 +206,7 @@ def get_app_info(app_name: str) -> Dict[str, Any]:
             info['cache_size'] = sum(f.stat().st_size for f in cache_files) / 1024
         except Exception:
             pass
-    
+
     if app_logs_dir.exists():
         try:
             info['has_logs'] = True
@@ -189,7 +214,7 @@ def get_app_info(app_name: str) -> Dict[str, Any]:
             info['logs_size'] = sum(f.stat().st_size for f in log_files if f.is_file()) / 1024
         except Exception:
             pass
-    
+
     return info
 
 
@@ -205,12 +230,12 @@ def force_remove_path(path: Path, max_attempts: int = 5, delay: float = 1.0) -> 
     """Принудительно удаляет файл или директорию с проверкой результата."""
     if not path.exists():
         return True, ""
-    
+
     if path.is_file():
         if sys.platform == 'win32':
             try:
                 os.chmod(path, stat.S_IWRITE)
-            except:
+            except Exception:
                 pass
         for attempt in range(max_attempts):
             try:
@@ -223,7 +248,7 @@ def force_remove_path(path: Path, max_attempts: int = 5, delay: float = 1.0) -> 
                     return False, str(e)
                 time.sleep(delay)
         return False, "Файл существует после всех попыток удаления"
-    
+
     if path.is_dir():
         for attempt in range(max_attempts):
             try:
@@ -239,7 +264,7 @@ def force_remove_path(path: Path, max_attempts: int = 5, delay: float = 1.0) -> 
                                 try:
                                     os.chmod(item, stat.S_IWRITE)
                                     item.unlink()
-                                except:
+                                except Exception:
                                     pass
                         if path.exists():
                             path.rmdir()
@@ -249,8 +274,15 @@ def force_remove_path(path: Path, max_attempts: int = 5, delay: float = 1.0) -> 
                         return False, f"rmtree failed: {e}, manual cleanup failed: {e2}"
                 time.sleep(delay)
         return False, "Директория существует после всех попыток удаления"
-    
+
     return True, ""
+
+
+def _manual_rm_hint(path: Path) -> str:
+    """OS-aware command to remove path manually."""
+    if sys.platform == 'win32':
+        return f'rmdir /s /q "{path}"'
+    return f'rm -rf "{path}"'
 
 
 def cleanup(
@@ -261,13 +293,13 @@ def cleanup(
 ) -> Tuple[bool, List[str]]:
     """
     Очищает следы SimpleWorkerNet.
-    
+
     Args:
         dry_run: Если True, только показывает, что будет удалено
         mode: Режим очистки ('all', 'logs', 'cache', 'config')
         app_name: Имя приложения (если None, удаляет все приложения)
         disable_cache_first: Отключить кэширование перед удалением
-    
+
     Returns:
         Кортеж (успех, список сообщений)
     """
@@ -275,7 +307,7 @@ def cleanup(
     messages = []
     success = True
     paths_to_verify = []
-    
+
     # Шаг 1: Отключаем кэширование в конфигурации
     if not dry_run and disable_cache_first and mode in ('all', 'cache'):
         if app_name:
@@ -286,13 +318,13 @@ def cleanup(
             modified = disable_cache_for_all_apps()
             if modified:
                 messages.append(f"  • Кэширование отключено в конфигурациях: {', '.join(modified)}")
-    
+
     if app_name:
         messages.append(f"\nПриложение: {app_name}")
         app_config = roots['config_root'] / app_name
         app_cache = roots['cache_root'] / app_name
         app_logs = roots['logs_root'] / app_name / 'logs'
-        
+
         # Удаление конфигурации
         if mode in ('all', 'config'):
             if app_config.exists():
@@ -309,7 +341,7 @@ def cleanup(
                         paths_to_verify.append(app_config)
             else:
                 messages.append(f"  • Конфигурация не найдена")
-        
+
         # Удаление кэша
         if mode in ('all', 'cache'):
             if app_cache.exists():
@@ -321,7 +353,7 @@ def cleanup(
                         try:
                             rel_path = cf.relative_to(app_cache)
                             messages.append(f"      - {rel_path}")
-                        except:
+                        except Exception:
                             messages.append(f"      - {cf.name}")
                     if len(cache_files) > 5:
                         messages.append(f"      ... и еще {len(cache_files) - 5} файлов")
@@ -345,7 +377,7 @@ def cleanup(
                         success = False
             else:
                 messages.append(f"  • Кэш не найден")
-        
+
         # Удаление логов
         if mode in ('all', 'logs'):
             if app_logs.exists():
@@ -357,7 +389,7 @@ def cleanup(
                         try:
                             rel_path = lf.relative_to(app_logs)
                             messages.append(f"      - {rel_path}")
-                        except:
+                        except Exception:
                             messages.append(f"      - {lf.name}")
                     if len(log_files) > 5:
                         messages.append(f"      ... и еще {len(log_files) - 5} файлов")
@@ -371,10 +403,10 @@ def cleanup(
                         paths_to_verify.append(app_logs)
             else:
                 messages.append(f"  • Логи не найдены")
-    
+
     else:
         messages.append("\nПОЛНАЯ ОЧИСТКА SIMPLEWORKERNET")
-        
+
         # Удаление всей конфигурации
         if mode in ('all', 'config') and roots['config_root'].exists():
             config_size = sum(f.stat().st_size for f in roots['config_root'].rglob('*') if f.is_file()) / 1024
@@ -388,7 +420,7 @@ def cleanup(
                     messages.append(f"  • ОШИБКА: не удалось удалить конфигурацию {roots['config_root']}: {error}")
                     success = False
                     paths_to_verify.append(roots['config_root'])
-        
+
         # Удаление всего кэша
         if mode in ('all', 'cache') and roots['cache_root'].exists():
             cache_files = find_cache_files(roots['cache_root'])
@@ -399,7 +431,7 @@ def cleanup(
                     try:
                         rel_path = cf.relative_to(roots['cache_root'])
                         messages.append(f"      - {rel_path}")
-                    except:
+                    except Exception:
                         messages.append(f"      - {cf.name}")
                 if len(cache_files) > 5:
                     messages.append(f"      ... и еще {len(cache_files) - 5} файлов")
@@ -407,9 +439,9 @@ def cleanup(
                 app_dirs = []
                 try:
                     app_dirs = [d for d in roots['cache_root'].iterdir() if d.is_dir()]
-                except:
+                except Exception:
                     pass
-                
+
                 all_apps_deleted = True
                 for app_dir in app_dirs:
                     ok, error = force_remove_path(app_dir)
@@ -419,7 +451,7 @@ def cleanup(
                         messages.append(f"  • ОШИБКА: не удалось удалить кэш приложения {app_dir.name}: {error}")
                         all_apps_deleted = False
                         paths_to_verify.append(app_dir)
-                
+
                 if all_apps_deleted and roots['cache_root'].exists():
                     ok, error = force_remove_path(roots['cache_root'])
                     if ok:
@@ -430,7 +462,7 @@ def cleanup(
                         paths_to_verify.append(roots['cache_root'])
                 elif not all_apps_deleted:
                     success = False
-        
+
         # Удаление всех логов
         if mode in ('all', 'logs') and roots['logs_root'].exists():
             log_files = list(roots['logs_root'].rglob('*.log'))
@@ -441,7 +473,7 @@ def cleanup(
                     try:
                         rel_path = lf.relative_to(roots['logs_root'])
                         messages.append(f"      - {rel_path}")
-                    except:
+                    except Exception:
                         messages.append(f"      - {lf.name}")
                 if len(log_files) > 5:
                     messages.append(f"      ... и еще {len(log_files) - 5} файлов")
@@ -453,7 +485,7 @@ def cleanup(
                     messages.append(f"  • ОШИБКА: не удалось удалить логи {roots['logs_root']}: {error}")
                     success = False
                     paths_to_verify.append(roots['logs_root'])
-    
+
     # Финальная проверка
     if not dry_run and paths_to_verify:
         still_exist = [p for p in paths_to_verify if p.exists()]
@@ -462,7 +494,7 @@ def cleanup(
             for p in still_exist:
                 messages.append(f"    • {p}")
             success = False
-    
+
     return success, messages
 
 
@@ -480,12 +512,12 @@ def cleanup_with_confirmation(
         print("\n" + "=" * 60)
         print("УСТАНОВЛЕННЫЕ ПРИЛОЖЕНИЯ SIMPLEWORKERNET")
         print("=" * 60)
-        
+
         apps = list_applications()
         if not apps:
             print("\nПриложения не найдены.")
             return True
-        
+
         total_config = total_cache = total_logs = 0
         for app in sorted(apps):
             info = get_app_info(app)
@@ -501,39 +533,39 @@ def cleanup_with_confirmation(
                 log_count = len(list(info['logs_path'].glob('*.log'))) if info['logs_path'].exists() else 0
                 print(f"    • Логи: {info['logs_size']:.1f} KB ({log_count} файлов)")
                 total_logs += info['logs_size']
-        
+
         print("\n" + "-" * 60)
         print(f"ВСЕГО: Конфигурация: {total_config:.1f} KB, Кэш: {total_cache:.1f} KB, Логи: {total_logs:.1f} KB")
         print(f"Общий размер: {total_config + total_cache + total_logs:.1f} KB")
         print("=" * 60)
         return True
-    
+
     mode_desc = {'all': 'ВСЕХ приложений (ПОЛНАЯ ОЧИСТКА)', 'logs': 'логов', 'cache': 'кэша', 'config': 'конфигурации'}
     action = f"для приложения '{app_name}'" if app_name else f"для {mode_desc[mode]}"
     print("=" * 60)
     print(f"ОЧИСТКА SIMPLEWORKERNET {action}")
     print("=" * 60)
-    
+
     success, messages = cleanup(dry_run=True, mode=mode, app_name=app_name)
     print("\nБудет удалено:\n")
     for msg in messages:
         print(f"  {msg}")
-    
+
     if not force:
         print()
         resp = input("\nВы уверены, что хотите удалить эти данные? (y/N): ").strip().lower()
         if resp not in ('y', 'yes', 'д', 'да'):
             print("\nОчистка отменена")
             return False
-    
+
     print("\nВыполнение очистки...")
     success, messages = cleanup(dry_run=False, mode=mode, app_name=app_name, disable_cache_first=True)
-    
+
     print("\n" + "=" * 60)
     for msg in messages:
         print(f"  {msg}")
     print("=" * 60)
-    
+
     # Финальная проверка
     if success:
         time.sleep(2)
@@ -545,7 +577,7 @@ def cleanup_with_confirmation(
         else:
             if roots['cache_root'].exists():
                 new_files.extend(find_cache_files(roots['cache_root']))
-        
+
         if new_files:
             print(f"\n⚠️  ВНИМАНИЕ: Обнаружены новые файлы кэша ({len(new_files)} шт.)")
             print("   Возможно, какой-то процесс создал их заново. Рекомендуется закрыть все программы,")
@@ -561,12 +593,12 @@ def cleanup_with_confirmation(
         if app_name:
             for p in [roots['config_root'] / app_name, roots['cache_root'] / app_name, roots['logs_root'] / app_name / 'logs']:
                 if p.exists():
-                    print(f"    rmdir /s /q \"{p}\"")
+                    print(f"    {_manual_rm_hint(p)}")
         else:
             for p in [roots['config_root'], roots['cache_root'], roots['logs_root']]:
                 if p.exists():
-                    print(f"    rmdir /s /q \"{p}\"")
-    
+                    print(f"    {_manual_rm_hint(p)}")
+
     return success
 
 
@@ -579,12 +611,12 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='показать, что будет удалено, без удаления')
     parser.add_argument('--list', '-l', action='store_true', help='показать список установленных приложений')
     parser.add_argument('--app', '-a', type=str, help='имя приложения для очистки')
-    
+
     args = parser.parse_args()
-    
+
     if args.list:
         return 0 if cleanup_with_confirmation(list_apps=True) else 1
-    
+
     mode: CleanupMode
     if args.logs_only:
         mode = 'logs'
@@ -594,7 +626,7 @@ def main():
         mode = 'config'
     else:
         mode = 'all'
-    
+
     return 0 if cleanup_with_confirmation(force=args.force, mode=mode, app_name=args.app) else 1
 
 
