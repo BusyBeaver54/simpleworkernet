@@ -50,24 +50,58 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 
 ```text
 src/simpleworkernet/
-├── core/                    # client, config, logger, field-cache
-├── models/                  # BaseModel, primitives, categories/*
-├── smartdata/               # SmartData, metadata
+├── __init__.py              # публичный API, предзагрузка кэша моделей
+├── __main__.py
+├── __version__.py
+├── cli.py                   # точка входа cleanup-simpleworkernet
+├── core/
+│   ├── client.py            # WorkerNetClient (сессии, GET/POST, ретраи)
+│   ├── config.py            # ConfigManager + пути XDG/AppData
+│   ├── cache.py             # SmartDataCache (LFU/LRU/FIFO)
+│   ├── logger.py            # раздельные console/file handlers
+│   ├── constants.py         # DEBUG/INFO/WARNING/ERROR/CRITICAL
+│   ├── exceptions.py
+│   └── typing.py
+├── models/
+│   ├── base.py              # BaseModel, BaseCategory, smart_model, CollapsedField
+│   ├── primitives.py        # GeoPoint, vStr, vMoney, vINN, …
+│   ├── operators.py         # Operator, Where
+│   └── categories/          # API-категории WorkerNet
+│       ├── customer.py, device.py, fiber.py, node.py, …
+│       └── (≈30 модулей)
+├── smartdata/
+│   ├── core.py              # SmartData — fluent filters/aggregates
+│   ├── helpers.py
+│   ├── metadata.py          # PathSegment, MetaData
+│   └── processor.py         # кастинг JSON → модели
 ├── utils/
-│   ├── graphics.py
+│   ├── app_name.py          # get_app_name (хеш процесса)
+│   ├── decorators.py        # api_method, timer, retry, …
+│   ├── graphics.py          # SVG/PNG
 │   └── topology/
 │       ├── topology.py      # фасад Topology
-│       ├── cache.py         # DataCache (инстанс)
-│       ├── graphs/          # CGraph, FNGraph
-│       ├── builders/        # GraphBuilder + handlers
-│       └── attenuation/     # калькулятор затуханий
+│       ├── cache.py         # DataCache (инстанс, не синглтон)
+│       ├── constants.py     # TYPE_OLT, TYPE_FIBER, …
+│       ├── keys.py          # ObjKey, Interface
+│       ├── models.py        # CGraphVertex/Edge, FNGraphVertex/Edge
+│       ├── context.py       # BuildContext
+│       ├── linear.py        # LinearPathFinder
+│       ├── merge.py         # merge_cgraphs / merge_fngraphs
+│       ├── graphs/
+│       │   ├── cgraph.py    # CGraph (интерфейсы + коммутации)
+│       │   └── fngraph.py   # FNGraph (узлы + fiber_id)
+│       ├── builders/
+│       │   ├── base.py      # GraphBuilder
+│       │   └── handlers.py  # Fiber/Splitter/Cross/… handlers
+│       └── attenuation/
 │           ├── calculator.py
 │           ├── catalog.py
-│           ├── models.py
-│           ├── length.py
-│           ├── template.py
+│           ├── models.py    # AttenuationSegment, PathReport
+│           ├── length.py    # resolve_fiber_length_m
+│           ├── template.py  # generate_template из live API
 │           └── defaults.json
-└── scripts/uninstall.py
+└── scripts/
+    └── uninstall.py         # cleanup логики (OS-aware)
 ```
 
 ### Публичный импорт
@@ -81,6 +115,7 @@ from simpleworkernet import (
     config_manager, log, cache,
     Topology, CGraph, FNGraph,
     cleanup,
+    save_svg, load_svg, svg_to_png,
 )
 from simpleworkernet.utils.topology import (
     Attenuation, AttenuationCatalog, PathReport, DataCache,
@@ -91,13 +126,37 @@ from simpleworkernet.utils.topology import (
 
 ## Установка
 
+Базовый пакет:
+
 ```bash
 pip install simpleworkernet
-# или
-pip install git+https://github.com/busy4beaver/simpleworkernet.git
-
-pip install python-igraph pyproj Wand   # topology / UTM / SVG→PNG
 ```
+
+Или из GitHub:
+
+```bash
+pip install git+https://github.com/busy4beaver/simpleworkernet.git
+```
+
+Опциональные зависимости:
+
+```bash
+pip install python-igraph
+```
+
+```bash
+pip install pyproj
+```
+
+```bash
+pip install Wand
+```
+
+| Пакет | Зачем |
+|-------|-------|
+| `python-igraph` | графовая топология (CGraph / FNGraph) |
+| `pyproj` | проекция UTM |
+| `Wand` (ImageMagick) | SVG → PNG (один из бэкендов) |
 
 ---
 
@@ -110,30 +169,172 @@ with WorkerNetClient("my.workernet.ru", "your-api-key") as client:
     customers = client.Module.get_user_list()
     active = customers.where("state_id", 2)
     print(active.count())
+
+    # fluent-фильтры
+    rich = customers.where("balance", Operator.GE, 1000)
+    moscow = customers.where("city", "Москва")
 ```
+
+Контекстный менеджер открывает/закрывает сессию автоматически.
+Без `with` — вызывайте `client.session()` / `client.closeSession()`.
 
 ---
 
 ## Конфигурация
 
-`config_manager` — единая точка настроек. Изменения сразу; persistence — `save()`.
+`config_manager` — синглтон процесса. Изменения применяются сразу;
+persistence — только через `save()`.
+
+### Значения по умолчанию
+
+| Параметр | Default | Описание |
+|----------|---------|----------|
+| `console_level` | `"INFO"` | уровень консольного логгера |
+| `file_level` | `"DEBUG"` | уровень файлового логгера |
+| `log_to_file` | `False` | писать логи в файл |
+| `console_output` | `False` | вывод в stdout |
+| `max_log_files` | `50` | ротация файлов логов |
+| `cache.enabled` | `True` | SmartDataCache включён |
+| `cache.max_size` | `200000` | макс. записей |
+| `cache.evict_strategy` | `"lru"` | `lru` / `lfu` / `fifo` |
+| `cache.evict_threshold` | `0.95` | порог заполнения для eviction |
+| `cache.evict_percent` | `0.25` | доля удаляемых записей |
+| `cache.auto_save` | `True` | автосохранение при выходе |
+| `default_timeout` | `30` | таймаут HTTP (сек) |
+| `max_retries` | `3` | число повторов |
+| `user_agent` | `"SimpleWorkerNet/1.0"` | User-Agent |
+| `smartdata_max_depth` | `100` | макс. глубина кастинга |
+
+### Примеры
 
 ```python
 from simpleworkernet import config_manager
 
 config_manager.console_level = "INFO"
 config_manager.file_level = "DEBUG"
+config_manager.log_to_file = True
+config_manager.console_output = True
+
 config_manager.cache_enabled = True
 config_manager.cache_max_size = 200000
 config_manager.cache_evict_strategy = "lfu"
-config_manager.save()
+
+config_manager.default_timeout = 60
+config_manager.save()          # записать в config.json
+
+config_manager.show_config()  # печать текущих значений
+config_manager.reset(save=True)  # сброс на defaults
 ```
+
+Массовое обновление:
+
+```python
+config_manager.update(
+    console_level="WARNING",
+    cache={"max_size": 100000, "evict_strategy": "fifo"},
+    save=True,
+)
+```
+
+---
+
+## Основные компоненты
+
+### WorkerNetClient
+
+```python
+from simpleworkernet import WorkerNetClient
+
+client = WorkerNetClient(
+    host="my.workernet.ru",
+    apikey="key",
+    protocol="https",   # default
+    port=443,           # default
+)
+client.session()
+
+# категории API — атрибуты клиента
+users = client.Module.get_user_list()
+nodes = client.Node.get()
+fibers = client.Fiber.get_list(cable_line_type_id=1)
+
+client.closeSession()
+```
+
+### SmartData
+
+Ответы API автоматически оборачиваются в `SmartData`:
+
+```python
+users = client.Module.get_user_list()
+
+users.count()
+users.to_list()                    # list[model]
+users.where("state_id", 2)
+users.where("balance", Operator.GE, 500)
+users.select("id", "name")
+users.first()
+users.map(lambda u: u.name)
+```
+
+### BaseModel / smart_model
+
+```python
+from simpleworkernet import BaseModel, smart_model, vStr
+
+@smart_model
+class DeviceInfo(BaseModel):
+    id: int
+    name: vStr
+    parent_id: int | None = None
+```
+
+Рекурсивный кастинг Union / Optional / List / вложенных моделей из сырого JSON.
+
+---
+
+## Логирование
+
+```python
+from simpleworkernet import log, config_manager
+
+config_manager.console_output = True
+config_manager.console_level = "DEBUG"
+
+log.info("старт")
+log.debug("детали")
+log.warning("внимание")
+log.error("ошибка")
+```
+
+Файлы логов: `logs_dir` (см. [Каталоги данных](#каталоги-данных)), ротация по `max_log_files`.
+
+---
+
+## Кэширование
+
+`cache` — синглтон SmartDataCache (метаданные полей моделей).
+
+```python
+from simpleworkernet import cache, config_manager
+
+config_manager.cache_enabled = True
+cache.stats()       # размер, hits/misses
+cache.clear()
+cache.save()
+cache.load()
+```
+
+При старте пакета (если кэш включён) выполняется предзагрузка схем из всех category-моделей.
+
+Для топологии используется отдельный **DataCache** (не синглтон) — см. ниже.
 
 ---
 
 ## Каталоги данных
 
 Пути совпадают с `core.config` и `scripts/uninstall`.
+`<app>` — имя приложения с хешем (`get_app_name(with_hash=True)`).
 
 | ОС | Config | Cache | Logs |
 |----|--------|-------|------|
@@ -141,26 +342,116 @@ config_manager.save()
 | **Windows** | `%APPDATA%\simpleworkernet\<app>\` | `%LOCALAPPDATA%\simpleworkernet\<app>\` | `%APPDATA%\simpleworkernet\<app>\logs\` |
 | **macOS** | `~/Library/Application Support/simpleworkernet/<app>/` | `~/Library/Caches/simpleworkernet/<app>/` | `~/Library/Logs/simpleworkernet/<app>/` |
 
-`<app>` — имя приложения с хешем (`get_app_name`). Очистка: `cleanup-simpleworkernet`.
+Файл конфигурации: `config.json` в Config-директории.
 
 ---
 
 ## Очистка данных
 
+CLI:
+
 ```bash
-cleanup-simpleworkernet              # с подтверждением
+cleanup-simpleworkernet
+```
+
+```bash
 cleanup-simpleworkernet --force
+```
+
+```bash
 cleanup-simpleworkernet --dry-run
+```
+
+```bash
 cleanup-simpleworkernet --list
+```
+
+```bash
 cleanup-simpleworkernet --logs-only
+```
+
+```bash
 cleanup-simpleworkernet --cache-only
+```
+
+```bash
 cleanup-simpleworkernet --config-only
 ```
 
+Из Python:
+
 ```python
 from simpleworkernet import cleanup
-cleanup(force=True, mode="cache")  # logs | cache | config | all
+
+cleanup(force=True, mode="all")    # logs | cache | config | all
+cleanup(force=True, mode="cache")
 ```
+
+---
+
+## Графика
+
+```python
+from simpleworkernet import save_svg, load_svg, svg_to_png
+
+save_svg(svg_string, "scheme.svg")
+data = load_svg("scheme.svg")
+svg_to_png("scheme.svg", "scheme.png", width=1200)
+```
+
+Бэкенды (первый доступный): Wand → Cairo → Inkscape → WeasyPrint.
+
+---
+
+## Координаты
+
+`GeoPoint` / `GeoPointArray` — WGS84 и проекции в плоские метры.
+
+### Проекции
+
+| `projection` | Описание | Зависимости |
+|--------------|----------|-------------|
+| `"local"` (default) | East/North относительно `center`; Y = истинный север | нет |
+| `"utm"` | UTM-зона по долготе; опционально `correct_grid_north` | `pyproj` |
+| `"mercator"` | Web Mercator (EPSG:3857-подобная) | нет |
+
+### Масштаб Mercator
+
+Web Mercator завышает наземные расстояния в `1/cos(φ)`.  
+При `auto_scale_mercator=True` (по умолчанию) и заданном `center` масштаб
+умножается на `cos(center.lat)`, чтобы локальные XY ≈ истинные метры
+(как у `projection="local"`).
+
+```python
+from simpleworkernet import GeoPoint, GeoPointArray
+
+origin = GeoPoint(55.75, 37.62)
+p = GeoPoint(55.76, 37.63)
+
+# local ENU (рекомендуется для схем/расстояний)
+x, y = p.to_xy(center=origin)
+
+# Mercator с автокоррекцией масштаба
+x, y = p.to_xy(center=origin, projection="mercator")
+
+# «сырой» Mercator без коррекции
+x, y = p.to_xy(center=origin, projection="mercator", auto_scale_mercator=False)
+
+# UTM + выравнивание grid-north → true-north
+x, y = p.to_xy(center=origin, projection="utm")  # нужен pyproj
+
+# обратное преобразование
+back = GeoPoint.from_xy(x, y, center=origin, projection="local")
+
+# пакетно
+arr = GeoPointArray([(55.0, 37.0), (57.0, 39.0)])
+xy_list = arr.to_xy()                    # center = centroid
+sw, ne = arr.bounds()
+print(p.distance_to(origin))             # км (haversine)
+```
+
+Доп. параметры: `scale`, `offset`, `rotation_deg`, `absolute`,
+`correct_grid_north` (UTM).
 
 ---
 
@@ -173,20 +464,31 @@ from simpleworkernet import WorkerNetClient, Topology
 from simpleworkernet.utils.topology import DataCache
 
 client = WorkerNetClient("my.workernet.ru", "key")
-cache = DataCache()
+cache = DataCache()          # можно шарить между Topology
 topo = Topology(client, cache=cache)
 
 topo.build_from_cross("98d9d368-…", port=7)
+topo.build_from_device("olt", 12345, port=1)
+topo.build_from_customer(customer_id)
+topo.build_from_node(node_id)
+topo.build_from_fiber(fiber_id)
+topo.build_from_splitter(splitter_id)
+topo.build_from_cwdm(cwdm_id)
+topo.build_from_cable(cable_id)
+
 customers = topo.get_customers()
 linear = topo.topology_from_commutation("customer", customers[0])
+
+topo.save_to_file("topo.json")
+topo2 = Topology.load_from_file("topo.json", client=client, cache=cache)
 ```
 
 | Граф | Вершины | Рёбра |
 |------|---------|-------|
-| **CGraph** | интерфейсы (obj + side + port) | коммутации |
-| **FNGraph** | node_id | fiber_id |
+| **CGraph** | интерфейсы (`obj_type` + `obj_id` + `side` + `port`) | коммутации |
+| **FNGraph** | `node_id` | `fiber_id` |
 
-Методы: `build_from_device/customer/cross/splitter/cwdm/fiber/cable/node`, фильтры `included_fibers` / `excluded_fibers` / `excluded_nodes`, `topology_from_commutation`, `save_to_file` / `load_from_file`.
+Фильтры при build: `included_fibers`, `excluded_fibers`, `excluded_nodes`.
 
 ---
 
@@ -235,6 +537,19 @@ print(report.total_db, report.by_kind())
 | `splice` / `connector` | внешние стыки |
 | `force` | override на connect_id / fiber / splitter port |
 
+### Defaults (`defaults.json`)
+
+| Параметр | 1310 nm | 1490 nm | 1550 nm |
+|----------|---------|---------|----------|
+| fiber дБ/км | 0.35 | 0.28 | 0.22 |
+| splice | 0.05 дБ | | |
+| connector | 0.30 дБ | | |
+| adapter | 0.20 дБ | | |
+| geo_slack_k | 1.03 | | |
+| splitter_excess | 0.5 дБ | | |
+
+Типовые ratio-профили сплиттеров: `1x2_50/50`, `1x2_5/95`, …, `1x4_equal`, `1x8_equal`.
+
 ### Каталог и шаблон
 
 ```python
@@ -243,8 +558,6 @@ cat = generate_template(client, cache=topo._cache, path="attenuation.json")
 # пользователь дозаполняет ports / db_per_km, затем:
 cat = AttenuationCatalog.from_json("attenuation.json")
 ```
-
-Defaults: `utils/topology/attenuation/defaults.json` (1310/1490/1550 nm, splice 0.05, connector 0.3, adapter 0.2, типовые 1xN ratios).
 
 ### Удобные запросы
 
@@ -263,12 +576,62 @@ Defaults: `utils/topology/attenuation/defaults.json` (1310/1490/1550 nm, splice 
 
 ## Тесты
 
+### Offline (unit)
+
+Не требуют API. Покрывают примитивы, координаты, SmartData, operators,
+topology (CGraph/FNGraph/handlers/linear/merge/attenuation/cache) на
+синтетических данных.
+
 ```bash
-pytest tests/ -m "not integration" -v          # offline
-pytest tests/ -v --wn-host=… --wn-apikey=…     # + live
+pytest tests/ -m "not integration" -v
 ```
 
-Env: `WORKERNET_HOST`, `WORKERNET_APIKEY`, `WORKERNET_TEST_NODE_ID`, `WORKERNET_TEST_CUSTOMER_ID`.
+Только координаты:
+
+```bash
+pytest tests/test_coordinates.py -v
+```
+
+Только топология:
+
+```bash
+pytest tests/topology/ -v
+```
+
+### Integration (live API)
+
+Нужны доступный WorkerNet и ключ.
+
+```bash
+pytest tests/ -v --wn-host=my.workernet.ru --wn-apikey=YOUR_KEY
+```
+
+Или через окружение:
+
+```bash
+export WORKERNET_HOST=my.workernet.ru
+export WORKERNET_APIKEY=YOUR_KEY
+export WORKERNET_PROTOCOL=https
+export WORKERNET_PORT=443
+export WORKERNET_TEST_NODE_ID=123
+export WORKERNET_TEST_CUSTOMER_ID=456
+pytest tests/ -v
+```
+
+CLI-опции pytest (см. `tests/conftest.py`):
+
+| Опция | Env | Описание |
+|-------|-----|----------|
+| `--wn-host` | `WORKERNET_HOST` | хост API |
+| `--wn-apikey` | `WORKERNET_APIKEY` | API-ключ |
+| `--wn-protocol` | `WORKERNET_PROTOCOL` | `http` / `https` (default `https`) |
+| `--wn-port` | `WORKERNET_PORT` | порт (default `443`) |
+| `--nodeid` | `WORKERNET_TEST_NODE_ID` | ID узла для live topology |
+| `--customerid` | `WORKERNET_TEST_CUSTOMER_ID` | ID абонента |
+
+Без host/apikey integration-тесты автоматически `skip`.
+
+Маркер: `@pytest.mark.integration`.
 
 ---
 

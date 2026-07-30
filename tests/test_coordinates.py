@@ -59,6 +59,31 @@ def test_from_xy_roundtrip_mercator():
     assert abs(back.lon - target.lon) < 1e-5
 
 
+def test_mercator_auto_scale_matches_local():
+    """
+    auto_scale_mercator=True → масштаб × cos(lat),
+    чтобы локальные расстояния ≈ true metres (как у projection=local).
+    Без коррекции Web Mercator завышает на 1/cos(φ) ≈ 1.7–2× при 55°.
+    """
+    origin = GeoPoint(55.75, 37.62)
+    target = GeoPoint(55.76, 37.63)
+
+    lx, ly = target.to_xy(center=origin, projection="local")
+    mx, my = target.to_xy(center=origin, projection="mercator")
+    mx_raw, my_raw = target.to_xy(
+        center=origin, projection="mercator", auto_scale_mercator=False
+    )
+
+    d_local = math.hypot(lx, ly)
+    d_merc = math.hypot(mx, my)
+    d_raw = math.hypot(mx_raw, my_raw)
+
+    # с auto_scale — близко к local (допуск ~3 % на малых дистанциях)
+    assert abs(d_merc - d_local) / d_local < 0.03
+    # без auto_scale — заметно больше local (фактор ~1/cos(55°) ≈ 1.74)
+    assert d_raw / d_local > 1.5
+
+
 def test_to_xyz_local():
     origin = GeoPoint(55.75, 37.62)
     x, y, z = GeoPoint(55.75, 37.62).to_xyz(center=origin, z=10.0)
