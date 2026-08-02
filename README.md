@@ -36,7 +36,7 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 | **SmartData** | Автокастинг JSON → объекты, метаданные пути, fluent-фильтры |
 | **BaseModel** | Рекурсивный кастинг Union / Optional / List / вложенных моделей |
 | **WorkerNetClient** | Сессии, авто-GET/POST при длинном URL, ретраи |
-| **Логирование** | Раздельные уровни console / file, сессионные логи, ротация |
+| **Логирование** | Консольный вывод, включение из клиентского кода |
 | **Кэш полей** | LFU / LRU / FIFO, dirty-flag, предзагрузка из моделей |
 | **Топология** | CGraph + FNGraph, фильтры, линейные цепочки, save/load |
 | **Attenuation** | Расчёт оптических затуханий по CGraph (fiber / splitter / splice / adapter) |
@@ -58,7 +58,7 @@ src/simpleworkernet/
 │   ├── client.py            # WorkerNetClient (сессии, GET/POST, ретраи)
 │   ├── config.py            # ConfigManager + пути XDG/AppData
 │   ├── cache.py             # SmartDataCache (LFU/LRU/FIFO)
-│   ├── logger.py            # раздельные console/file handlers
+│   ├── logger.py            # консольный логгер (без файлов)
 │   ├── constants.py         # DEBUG/INFO/WARNING/ERROR/CRITICAL
 │   ├── exceptions.py
 │   └── typing.py
@@ -190,10 +190,7 @@ persistence — только через `save()`.
 | Параметр | Default | Описание |
 |----------|---------|----------|
 | `console_level` | `"INFO"` | уровень консольного логгера |
-| `file_level` | `"DEBUG"` | уровень файлового логгера |
-| `log_to_file` | `False` | писать логи в файл |
-| `console_output` | `False` | вывод в stdout |
-| `max_log_files` | `50` | ротация файлов логов |
+| `console_output` | `False` | вывод в stdout (включается из клиентского кода) |
 | `cache.enabled` | `True` | SmartDataCache включён |
 | `cache.max_size` | `200000` | макс. записей |
 | `cache.evict_strategy` | `"lru"` | `lru` / `lfu` / `fifo` |
@@ -211,9 +208,7 @@ persistence — только через `save()`.
 from simpleworkernet import config_manager
 
 config_manager.console_level = "INFO"
-config_manager.file_level = "DEBUG"
-config_manager.log_to_file = True
-config_manager.console_output = True
+config_manager.console_output = True  # включить логи из клиентского кода
 
 config_manager.cache_enabled = True
 config_manager.cache_max_size = 200000
@@ -295,19 +290,26 @@ class DeviceInfo(BaseModel):
 
 ## Логирование
 
+Логирование только в консоль. Файлы не создаются. Клиентский код включает вывод так:
+
 ```python
 from simpleworkernet import log, config_manager
 
+# включить логи библиотеки и свои сообщения через тот же log
 config_manager.console_output = True
 config_manager.console_level = "DEBUG"
+# или: log.set_console_output(True)
 
 log.info("старт")
 log.debug("детали")
 log.warning("внимание")
 log.error("ошибка")
+
+# доступ к стандартному logging.Logger при необходимости
+# log.underlying_logger
 ```
 
-Файлы логов: `logs_dir` (см. [Каталоги данных](#каталоги-данных)), ротация по `max_log_files`.
+По умолчанию `console_output=False` — библиотека молчит, пока клиент явно не включит логи.
 
 ---
 
@@ -338,11 +340,13 @@ cache.load()
 
 | ОС | Config | Cache | Logs |
 |----|--------|-------|------|
-| **Linux** | `~/.config/simpleworkernet/<app>/` | `~/.cache/simpleworkernet/<app>/` | `~/.local/share/simpleworkernet/<app>/logs/` |
-| **Windows** | `%APPDATA%\simpleworkernet\<app>\` | `%LOCALAPPDATA%\simpleworkernet\<app>\` | `%APPDATA%\simpleworkernet\<app>\logs\` |
-| **macOS** | `~/Library/Application Support/simpleworkernet/<app>/` | `~/Library/Caches/simpleworkernet/<app>/` | `~/Library/Logs/simpleworkernet/<app>/` |
+| **Linux** | `~/.config/simpleworkernet/<app>/` | `~/.cache/simpleworkernet/<app>/` | `~/.local/share/simpleworkernet/<app>/logs/` (legacy) |
+| **Windows** | `%APPDATA%\\simpleworkernet\\<app>\\` | `%LOCALAPPDATA%\\simpleworkernet\\<app>\\` | `%APPDATA%\\simpleworkernet\\<app>\\logs\\` (legacy) |
+| **macOS** | `~/Library/Application Support/simpleworkernet/<app>/` | `~/Library/Caches/simpleworkernet/<app>/` | `~/Library/Logs/simpleworkernet/<app>/` (legacy) |
 
 Файл конфигурации: `config.json` в Config-директории.
+
+Директория Logs больше не используется для записи; `cleanup-simpleworkernet --logs-only` удаляет только старые (legacy) файлы.
 
 ---
 
