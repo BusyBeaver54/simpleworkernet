@@ -42,7 +42,7 @@ def get_app_cache_dir(app_name: str) -> Path:
 
 
 def get_app_logs_dir(app_name: str) -> Path:
-    """Возвращает директорию логов для приложения"""
+    """Возвращает директорию логов для приложения (legacy, для cleanup старых файлов)."""
     if sys.platform == 'win32':
         base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
     elif sys.platform == 'darwin':
@@ -57,7 +57,7 @@ class CacheConfig:
     """Конфигурация кэша для SmartDataCache"""
     enabled: bool = True
     max_size: int = 200000
-    evict_strategy: CacheEvictStrategy = 'lru'   
+    evict_strategy: CacheEvictStrategy = 'lru'
     evict_threshold: float = 0.95                 # порог заполнения
     evict_percent: float = 0.25                   # доля удаляемых записей
     auto_save: bool = True
@@ -77,12 +77,9 @@ class CacheConfig:
 class WorkerNetConfig:
     """Конфигурация для текущего приложения"""
 
-    # Общие настройки
+    # Общие настройки (логирование только в консоль)
     console_level: LogLevel = 'INFO'      # Уровень для консоли
-    file_level: LogLevel = 'DEBUG'        # Уровень для файла
-    log_to_file: bool = False
-    console_output: bool = False
-    max_log_files: int = 50
+    console_output: bool = False          # Включить вывод в stdout (из клиентского кода)
 
     # Настройки кэша
     cache: CacheConfig = field(default_factory=CacheConfig)
@@ -102,7 +99,7 @@ class WorkerNetConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'WorkerNetConfig':
-        # Рекурсивно создаём объекты
+        # Рекурсивно создаём объекты; неизвестные/устаревшие ключи (file_level и т.п.) игнорируются
         valid_keys = cls.__annotations__.keys()
         filtered = {}
         for k, v in data.items():
@@ -144,10 +141,9 @@ class ConfigManager:
         self.cache_dir = get_app_cache_dir(self.app_name)
         self.logs_dir = get_app_logs_dir(self.app_name)
 
-        # Создаём директории если нужно
+        # Создаём директории если нужно (логи больше не пишем — logs_dir только для cleanup legacy)
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         # Загружаем конфигурацию из файла
         self._config = self._load()
@@ -206,28 +202,6 @@ class ConfigManager:
         logger.info(f"Уровень логирования в консоли изменён на {value}")
 
     @property
-    def file_level(self) -> str:
-        return self._config.file_level
-
-    @file_level.setter
-    def file_level(self, value: str):
-        self._config.file_level = value
-        logger = self._get_logger()
-        logger.set_file_level(value)
-        logger.info(f"Уровень логирования в файле изменён на {value}")
-
-    @property
-    def log_to_file(self) -> bool:
-        return self._config.log_to_file
-
-    @log_to_file.setter
-    def log_to_file(self, value: bool):
-        self._config.log_to_file = value
-        logger = self._get_logger()
-        logger.configure(**self.get_log_config())
-        logger.info(f"Логирование в файл: {'включено' if value else 'отключено'}")
-
-    @property
     def console_output(self) -> bool:
         return self._config.console_output
 
@@ -238,17 +212,6 @@ class ConfigManager:
         logger.configure(**self.get_log_config())
         status = "включён" if value else "отключён"
         logger.info(f"Вывод в консоль: {status}")
-
-    @property
-    def max_log_files(self) -> int:
-        return self._config.max_log_files
-
-    @max_log_files.setter
-    def max_log_files(self, value: int):
-        self._config.max_log_files = value
-        logger = self._get_logger()
-        logger.configure(**self.get_log_config())
-        logger.info(f"Максимальное количество файлов логов изменено на {value}")
 
     # --- Свойства кэша ---
 
@@ -388,10 +351,7 @@ class ConfigManager:
         """Применяет изменения конфигурации к компонентам (здесь только кэш и логирование)"""
         # Логирование
         if (old.console_level != new.console_level or
-            old.file_level != new.file_level or
-            old.log_to_file != new.log_to_file or
-            old.console_output != new.console_output or
-            old.max_log_files != new.max_log_files):
+            old.console_output != new.console_output):
             logger = self._get_logger()
             logger.configure(**self.get_log_config())
 
@@ -427,11 +387,7 @@ class ConfigManager:
     def get_log_config(self) -> Dict[str, Any]:
         return {
             'console_level': self._config.console_level,
-            'file_level': self._config.file_level,
-            'log_to_file': self._config.log_to_file,
             'console_output': self._config.console_output,
-            'max_log_files': self._config.max_log_files,
-            'log_dir': str(self.logs_dir),
             'app_name': self.app_name,
             'display_name': self.display_name,
         }
@@ -460,14 +416,11 @@ class ConfigManager:
             f"Приложение: {self.app_name}",
             f"Файл конфигурации: {self.config_file}",
             f"Директория кэша: {self.cache_dir}",
-            f"Директория логов: {self.logs_dir}",
+            f"Директория логов (legacy): {self.logs_dir}",
             "-" * 60,
-            "ЛОГИРОВАНИЕ:",
-            f"  Уровень файл: {config_dict['file_level']}",
-            f"  Уровень консоль: {config_dict['console_level']}",
-            f"  В файл: {config_dict['log_to_file']}",
-            f"  В консоль: {config_dict['console_output']}",
-            f"  Макс. файлов: {config_dict['max_log_files']}",
+            "ЛОГИРОВАНИЕ (только консоль):",
+            f"  Уровень консоль: {config_dict.get('console_level', 'INFO')}",
+            f"  В консоль: {config_dict.get('console_output', False)}",
             "-" * 60,
             "КЭШ:",
             f"  Включён: {cache_cfg.get('enabled', False)}",
