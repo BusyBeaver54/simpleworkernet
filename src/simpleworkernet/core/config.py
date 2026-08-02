@@ -11,11 +11,9 @@ from typing import Optional, Dict, Any, Union, Literal
 from dataclasses import dataclass, field, asdict
 
 from ..utils.app_name import get_app_name
-from .constants import DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 
 # Типы для конфигурации
-LogLevel = Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 CacheEvictStrategy = Literal['lru', 'lfu', 'fifo']
 
 
@@ -77,10 +75,6 @@ class CacheConfig:
 class WorkerNetConfig:
     """Конфигурация для текущего приложения"""
 
-    # Общие настройки (логирование только в консоль)
-    console_level: LogLevel = 'INFO'      # Уровень для консоли
-    console_output: bool = False          # Включить вывод в stdout (из клиентского кода)
-
     # Настройки кэша
     cache: CacheConfig = field(default_factory=CacheConfig)
 
@@ -99,7 +93,7 @@ class WorkerNetConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'WorkerNetConfig':
-        # Рекурсивно создаём объекты; неизвестные/устаревшие ключи (file_level и т.п.) игнорируются
+        # Рекурсивно создаём объекты; неизвестные/устаревшие ключи (console_level, log_to_file и т.п.) игнорируются
         valid_keys = cls.__annotations__.keys()
         filtered = {}
         for k, v in data.items():
@@ -189,29 +183,6 @@ class ConfigManager:
             logger.error(f"Ошибка сохранения конфигурации: {e}")
 
     # ==================== Свойства для прямого доступа к настройкам ====================
-
-    @property
-    def console_level(self) -> str:
-        return self._config.console_level
-
-    @console_level.setter
-    def console_level(self, value: str):
-        self._config.console_level = value
-        logger = self._get_logger()
-        logger.set_console_level(value)
-        logger.info(f"Уровень логирования в консоли изменён на {value}")
-
-    @property
-    def console_output(self) -> bool:
-        return self._config.console_output
-
-    @console_output.setter
-    def console_output(self, value: bool):
-        self._config.console_output = value
-        logger = self._get_logger()
-        logger.configure(**self.get_log_config())
-        status = "включён" if value else "отключён"
-        logger.info(f"Вывод в консоль: {status}")
 
     # --- Свойства кэша ---
 
@@ -348,13 +319,7 @@ class ConfigManager:
         return self
 
     def _apply_changes(self, old: WorkerNetConfig, new: WorkerNetConfig):
-        """Применяет изменения конфигурации к компонентам (здесь только кэш и логирование)"""
-        # Логирование
-        if (old.console_level != new.console_level or
-            old.console_output != new.console_output):
-            logger = self._get_logger()
-            logger.configure(**self.get_log_config())
-
+        """Применяет изменения конфигурации к компонентам"""
         # Кэш – обновляем локальные копии
         if old.cache != new.cache:
             cache = self._get_cache()
@@ -362,9 +327,6 @@ class ConfigManager:
 
     def _apply_all_changes(self):
         """Применяет все текущие настройки к компонентам"""
-        logger = self._get_logger()
-        logger.configure(**self.get_log_config())
-
         cache = self._get_cache()
         cache._apply_config()
         self._get_logger().debug("Все настройки применены к компонентам")
@@ -382,14 +344,6 @@ class ConfigManager:
             'auto_save': cfg.auto_save,
             'cache_dir': str(self.cache_dir),
             'evict_strategy': cfg.evict_strategy,
-        }
-
-    def get_log_config(self) -> Dict[str, Any]:
-        return {
-            'console_level': self._config.console_level,
-            'console_output': self._config.console_output,
-            'app_name': self.app_name,
-            'display_name': self.display_name,
         }
 
     def get_client_config(self) -> Dict[str, Any]:
@@ -417,10 +371,6 @@ class ConfigManager:
             f"Файл конфигурации: {self.config_file}",
             f"Директория кэша: {self.cache_dir}",
             f"Директория логов (legacy): {self.logs_dir}",
-            "-" * 60,
-            "ЛОГИРОВАНИЕ (только консоль):",
-            f"  Уровень консоль: {config_dict.get('console_level', 'INFO')}",
-            f"  В консоль: {config_dict.get('console_output', False)}",
             "-" * 60,
             "КЭШ:",
             f"  Включён: {cache_cfg.get('enabled', False)}",
