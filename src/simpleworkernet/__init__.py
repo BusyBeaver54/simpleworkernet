@@ -16,11 +16,6 @@ is_cli = any(arg.endswith(('cleanup-simpleworkernet', 'simpleworkernet-cli'))
 
 if is_cli:
     from .scripts.uninstall import cleanup_with_confirmation, list_applications
-    from .core.logger import log
-    from .core.config import config_manager
-
-    log.suppress_output(True)
-    log.configure(**config_manager.get_log_config())
 
     __all__ = [
         '__version__', '__author__', '__email__', '__license__',
@@ -31,7 +26,6 @@ else:
     from .utils.app_name import get_app_name
     from .core.config import config_manager
     from .core.logger import log
-    log.configure(**config_manager.get_log_config())
 
     from .core.client import WorkerNetClient
     from .core.cache import cache
