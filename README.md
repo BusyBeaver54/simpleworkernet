@@ -36,7 +36,7 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 | **SmartData** | Автокастинг JSON → объекты, метаданные пути, fluent-фильтры |
 | **BaseModel** | Рекурсивный кастинг Union / Optional / List / вложенных моделей |
 | **WorkerNetClient** | Сессии, авто-GET/POST при длинном URL, ретраи |
-| **Логирование** | Консольный вывод, включение из клиентского кода |
+| **Логирование** | Стандартный `logging`, без собственного управления |
 | **Кэш полей** | LFU / LRU / FIFO, dirty-flag, предзагрузка из моделей |
 | **Топология** | CGraph + FNGraph, фильтры, линейные цепочки, save/load |
 | **Attenuation** | Расчёт оптических затуханий по CGraph (fiber / splitter / splice / adapter) |
@@ -58,7 +58,7 @@ src/simpleworkernet/
 │   ├── client.py            # WorkerNetClient (сессии, GET/POST, ретраи)
 │   ├── config.py            # ConfigManager + пути XDG/AppData
 │   ├── cache.py             # SmartDataCache (LFU/LRU/FIFO)
-│   ├── logger.py            # консольный логгер (без файлов)
+│   ├── logger.py            # фасад над stdlib logging
 │   ├── constants.py         # DEBUG/INFO/WARNING/ERROR/CRITICAL
 │   ├── exceptions.py
 │   └── typing.py
@@ -189,8 +189,6 @@ persistence — только через `save()`.
 
 | Параметр | Default | Описание |
 |----------|---------|----------|
-| `console_level` | `"INFO"` | уровень консольного логгера |
-| `console_output` | `False` | вывод в stdout (включается из клиентского кода) |
 | `cache.enabled` | `True` | SmartDataCache включён |
 | `cache.max_size` | `200000` | макс. записей |
 | `cache.evict_strategy` | `"lru"` | `lru` / `lfu` / `fifo` |
@@ -207,9 +205,6 @@ persistence — только через `save()`.
 ```python
 from simpleworkernet import config_manager
 
-config_manager.console_level = "INFO"
-config_manager.console_output = True  # включить логи из клиентского кода
-
 config_manager.cache_enabled = True
 config_manager.cache_max_size = 200000
 config_manager.cache_evict_strategy = "lfu"
@@ -225,7 +220,6 @@ config_manager.reset(save=True)  # сброс на defaults
 
 ```python
 config_manager.update(
-    console_level="WARNING",
     cache={"max_size": 100000, "evict_strategy": "fifo"},
     save=True,
 )
@@ -290,26 +284,23 @@ class DeviceInfo(BaseModel):
 
 ## Логирование
 
-Логирование только в консоль. Файлы не создаются. Клиентский код включает вывод так:
+Библиотека **не управляет** handlers и уровнями. Сообщения идут через стандартный
+`logging` (логгер `workernet.<app>`), клиент настраивает вывод сам:
 
 ```python
-from simpleworkernet import log, config_manager
+import logging
+from simpleworkernet import log
 
-# включить логи библиотеки и свои сообщения через тот же log
-config_manager.console_output = True
-config_manager.console_level = "DEBUG"
-# или: log.set_console_output(True)
+logging.basicConfig(level=logging.DEBUG)
 
 log.info("старт")
 log.debug("детали")
 log.warning("внимание")
 log.error("ошибка")
 
-# доступ к стандартному logging.Logger при необходимости
-# log.underlying_logger
+# или точечно:
+# logging.getLogger("workernet").setLevel(logging.INFO)
 ```
-
-По умолчанию `console_output=False` — библиотека молчит, пока клиент явно не включит логи.
 
 ---
 
