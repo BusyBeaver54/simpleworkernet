@@ -14,9 +14,17 @@ with WorkerNetClient("my.workernet.ru", "your-api-key") as client:
 ```
 
 Контекстный менеджер открывает/закрывает сессию автоматически.
-Без `with` — вызывайте `client.session()` / `client.closeSession()`.
+Без `with` — вызывайте `client.session()` / `client.closeSession()` для аналогичного эффекта.
+При обычном использовании (без вызова `client.session()`) сессия будет открываться и закрываться при каждом API-запросе 
+```python
+from simpleworkernet import WorkerNetClient, Where, Operator
 
-## Минимальный пример топологии
+client = WorkerNetClient("my.workernet.ru", "your-api-key")
+city = client.Address.get_city() # новая сессия (закрывается после запроса)
+cable_catalog = client.Fiber.catalog_cables_get(cable_line_type_id=2) # новая сессия (закрывается после запроса)
+```
+
+## Минимальный пример построения топологии
 
 ```python
 from simpleworkernet import WorkerNetClient, Topology
@@ -25,7 +33,7 @@ with WorkerNetClient("my.workernet.ru", "key") as client:
     topo = Topology(client)
     topo.build_from_device("olt", 12345, port=1)
     customers = topo.get_customers()
-    print(len(customers))
+    print("Скоммутированых абонентов:", len(customers))
 ```
 
 Нужен `python-igraph`.
