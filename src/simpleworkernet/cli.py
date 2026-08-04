@@ -9,20 +9,16 @@ from pathlib import Path
 
 from . import __version__
 from .scripts.uninstall import (
-    cleanup_with_confirmation, 
-    cleanup, 
+    cleanup_with_confirmation,
+    cleanup,
     list_applications,
     get_app_info,
     find_cache_files
 )
-from .core.logger import log
 
 
 def main():
     """Точка входа для команды cleanup-simpleworkernet"""
-    # Подавляем логи при запуске CLI
-    log.suppress_output(True)
-    
     parser = argparse.ArgumentParser(
         description="Cleanup SimpleWorkerNet - инструмент очистки данных",
         formatter_class=argparse.RawDescriptionHelpFormatter,
