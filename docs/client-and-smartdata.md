@@ -48,6 +48,11 @@ users.map(lambda u: u.name)
 from simpleworkernet import Operator, Where
 ```
 
+Для получения необработанных данных используйте lowercase категорий с теми же параметрами:
+```python
+users = client.module.get_user_list()
+```
+
 ## BaseModel / smart_model
 
 ```python
