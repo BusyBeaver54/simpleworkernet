@@ -36,7 +36,7 @@ cleanup-simpleworkernet = "simpleworkernet.cli:main"
 [project.urls]
 Homepage = "https://github.com/busy4beaver"
 Repository = "https://github.com/busy4beaver/simpleworkernet"
-Documentation = "https://github.com/busy4beaver/simpleworkernet#readme"
+Documentation = "https://github.com/busy4beaver/simpleworkernet/tree/main/docs"
 Funding = "https://yoomoney.ru/to/4100118099549894"
 Donation = "https://boosty.to/busybeaver/donate"
 
