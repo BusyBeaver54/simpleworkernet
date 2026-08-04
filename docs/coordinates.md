@@ -2,7 +2,22 @@
 
 `GeoPoint` / `GeoPointArray` — WGS84 и проекции в плоские метры.
 
-**По умолчанию:** `projection="mercator"` (Web Mercator).
+**По умолчанию:** `projection="mercator"` (`DEFAULT_PROJECTION`).
+
+```python
+from simpleworkernet import GeoPoint, GeoPointArray
+from simpleworkernet.models.primitives import LEGACY_TO_KM, HAS_PYPROJ
+```
+
+## Создание GeoPoint
+
+```python
+GeoPoint(55.75, 37.62)
+GeoPoint([55.75, 37.62])
+GeoPoint("55.75,37.62")
+GeoPoint({"lat": 55.75, "lon": 37.62})
+GeoPoint(other_geopoint)
+```
 
 ## Проекции
 
@@ -19,58 +34,83 @@ Web Mercator завышает наземные расстояния в `1/cos(φ
 При **relative**-режиме (`center` задан, `absolute=False`) и
 `auto_scale_mercator=True` (default):
 
-1. считаются «сырые» mercator-координаты точки и центра;
-2. берётся **разность** (delta);
-3. delta умножается на `cos(center.lat)`.
+1. сырые mercator-координаты точки и центра;
+2. **разность** (delta);
+3. delta × `cos(center.lat)`.
 
-Так центр остаётся точно `(0, 0)`, без фиктивного сдвига, а расстояния
-на субкилометровых базисах совпадают с `projection="local"` (сфера R=6378137)
-с точностью ≪ 0.1 %.
+Центр остаётся `(0, 0)`; на субкилометровых базисах совпадает с `projection="local"` (R=6378137) с точностью ≪ 0.1 %.
 
-Для подложки тайлов OSM/Google используйте `absolute=True` и
-`auto_scale_mercator=False` (сырые EPSG:3857-метры).
+Для тайлов OSM/Google: `absolute=True`, `auto_scale_mercator=False` (EPSG:3857-like).
 
 ## Legacy AUTOCAD
 
-`legacy=True` — совместимость со старым AUTOCAD GPS (`TO_KM ≈ 0.6194 ≈ cos(51.73°)`):
-абсолютные mercator-координаты умножаются на фиксированный коэффициент
-вместо relative × cos(lat).
+`legacy=True` — старый AUTOCAD GPS: абсолютный mercator × `LEGACY_TO_KM` (0.6194 ≈ cos(51.73°)), вместо relative × cos(lat).
 
-Константа: `LEGACY_TO_KM = 0.6194`.
+## Методы GeoPoint
+
+### `to_xy(...)`
+
+```python
+to_xy(
+    center=None,
+    *,
+    projection="mercator",
+    scale=1.0,
+    offset=(0.0, 0.0),
+    absolute=False,
+    auto_scale_mercator=True,
+    correct_grid_north=None,   # default: True для utm + center + not absolute
+    rotation_deg=0.0,
+    legacy=False,
+) -> tuple[float, float]
+```
+
+Если `center is None` и не `absolute` — origin = сама точка → `(0, 0)`.
+
+### `from_xy(x, y, center, ...)`
+
+Обратное преобразование (те же kwargs, без `absolute`).
+
+### `to_xyz(..., z=0.0, offset=(0,0,0))`
+
+XY + Z (z масштабируется `scale`, сдвигается `offset[2]`).
+
+### Прочее
+
+| Метод / свойство | Описание |
+|------------------|----------|
+| `distance_to(other)` | Haversine, **км** (R=6371). |
+| `to_tuple()` / `to_list()` / `to_dict()` | `(lat,lon)` / list / `{"lat","lon"}`. |
+| `utm_zone` | Номер зоны UTM по lon. |
+| `meridian_convergence()` | Схождение меридиана (°), для UTM grid-north. |
+
+## GeoPointArray
+
+```python
+arr = GeoPointArray([(55.0, 37.0), (57.0, 39.0)])
+arr.append(GeoPoint(56, 38))
+xy_list = arr.to_xy()              # center = centroid, mercator
+xyz_list = arr.to_xyz(zs=[0, 10])
+sw, ne = arr.bounds()
+c = arr.center()
+back = GeoPointArray.from_xy(xy_list, center=c)
+```
+
+`to_xy` / `from_xy` / `to_xyz` — те же параметры проекции, что у `GeoPoint`.
 
 ## Примеры
 
 ```python
-from simpleworkernet import GeoPoint, GeoPointArray
-
 origin = GeoPoint(55.75, 37.62)
 p = GeoPoint(55.76, 37.63)
 
-# default: mercator relative + metric scale
-x, y = p.to_xy(center=origin)
-
-# local ENU (строго East/North)
-x, y = p.to_xy(center=origin, projection="local")
-
-# сырой mercator (для тайлов), без ×cos
+x, y = p.to_xy(center=origin)                              # mercator + cos
+x, y = p.to_xy(center=origin, projection="local")          # ENU
 x, y = p.to_xy(center=origin, auto_scale_mercator=False)
-
-# абсолютный mercator (EPSG:3857-like)
 x, y = p.to_xy(absolute=True, auto_scale_mercator=False)
-
-# legacy AUTOCAD
-x, y = p.to_xy(center=origin, legacy=True)
-
-# UTM
-x, y = p.to_xy(center=origin, projection="utm")  # нужен pyproj
+x, y = p.to_xy(center=origin, legacy=True)                 # AUTOCAD
+x, y = p.to_xy(center=origin, projection="utm")            # нужен pyproj
 
 back = GeoPoint.from_xy(x, y, center=origin)
-
-arr = GeoPointArray([(55.0, 37.0), (57.0, 39.0)])
-xy_list = arr.to_xy()          # center = centroid, mercator
-sw, ne = arr.bounds()
-print(p.distance_to(origin))   # км (haversine)
+print(p.distance_to(origin))
 ```
-
-Доп. параметры: `scale`, `offset`, `rotation_deg`, `absolute`,
-`correct_grid_north` (UTM), `legacy`.
