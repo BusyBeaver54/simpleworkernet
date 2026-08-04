@@ -6,26 +6,29 @@
 pip install simpleworkernet
 ```
 
-Или из GitHub:
+Или из GitHub (актуальный `main`):
 
 ```bash
 pip install git+https://github.com/busy4beaver/simpleworkernet.git
 ```
 
-Требуется **Python 3.12+**.
+Требуется **Python 3.12+**. Единственная обязательная зависимость: `requests`.
+
+После установки доступны:
+
+- импорт `import simpleworkernet` / `from simpleworkernet import WorkerNetClient, …`
+- CLI: `cleanup-simpleworkernet`
 
 ## Опциональные зависимости
 
-| Пакет | Зачем |
-|-------|-------|
-| `python-igraph` | графовая топология (CGraph / FNGraph) |
-| `pyproj` | проекция UTM |
-| `Wand` (ImageMagick) | SVG → PNG (один из бэкендов) |
+| Пакет | Зачем | Без него |
+|-------|-------|----------|
+| `python-igraph` | CGraph / FNGraph / Topology | Импорт топологии упадёт при использовании графов |
+| `pyproj` | `projection="utm"` у GeoPoint | UTM недоступен (`HAS_PYPROJ=False`) |
+| `Wand` (+ ImageMagick) | SVG → PNG | Другие бэкенды (Cairo / Inkscape / WeasyPrint) или ошибка конвертации |
 
 ```bash
-pip install python-igraph
-pip install pyproj
-pip install Wand
+pip install python-igraph pyproj Wand
 ```
 
 ## Разработка
@@ -33,6 +36,9 @@ pip install Wand
 ```bash
 git clone https://github.com/busy4beaver/simpleworkernet.git
 cd simpleworkernet
-pip install -e ".[dev]"   # или: pip install -r requirements-dev.txt
+pip install -e .
+pip install -r requirements-dev.txt   # pytest и пр.
 pytest tests/ -m "not integration" -v
 ```
+
+Документация в репозитории: [docs/](https://github.com/busy4beaver/simpleworkernet/tree/main/docs).
