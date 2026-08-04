@@ -1,5 +1,7 @@
 # Быстрый старт
 
+## Клиент и фильтры
+
 ```python
 from simpleworkernet import WorkerNetClient, Where, Operator
 
@@ -8,23 +10,28 @@ with WorkerNetClient("my.workernet.ru", "your-api-key") as client:
     active = customers.where("state_id", 2)
     print(active.count())
 
-    # fluent-фильтры
-    rich = customers.where("balance", Operator.GE, 1000)
-    moscow = customers.where("city", "Москва")
+    rich = customers.where("balance", 1000, Operator.GTE)
+    moscow = customers.where("city", "Москва", Operator.LIKE)
+
+    # несколько условий
+    subset = customers.filter(
+        Where("state_id", 2),
+        Where("balance", 500, Operator.GTE),
+    )
+    print(subset.sort(key_field="balance", reverse=True).limit(5).to_list())
 ```
 
-Контекстный менеджер открывает/закрывает сессию автоматически.
-Без `with` — вызывайте `client.session()` / `client.closeSession()` для аналогичного эффекта.
-При обычном использовании (без вызова `client.session()`) сессия будет открываться и закрываться при каждом API-запросе 
+Контекстный менеджер открывает/закрывает HTTP-сессию.
+Без `with`: `client.session()` / `client.closeSession()`.
+
+## Сохранение выборки
+
 ```python
-from simpleworkernet import WorkerNetClient, Where, Operator
-
-client = WorkerNetClient("my.workernet.ru", "your-api-key")
-city = client.Address.get_city() # новая сессия (закрывается после запроса)
-cable_catalog = client.Fiber.catalog_cables_get(cable_line_type_id=2) # новая сессия (закрывается после запроса)
+active.to_file("active_users.json")          # структура по meta
+active.save_raw("active_raw.json")           # плоский raw
 ```
 
-## Минимальный пример построения топологии
+## Топология (нужен python-igraph)
 
 ```python
 from simpleworkernet import WorkerNetClient, Topology
@@ -33,9 +40,22 @@ with WorkerNetClient("my.workernet.ru", "key") as client:
     topo = Topology(client)
     topo.build_from_device("olt", 12345, port=1)
     customers = topo.get_customers()
-    print("Скоммутированых абонентов:", len(customers))
+    print(len(customers))
+
+    if customers:
+        linear = topo.topology_from_commutation("customer", customers[0])
+        topo.save_to_file("topo.json")
 ```
 
-Нужен `python-igraph`.
+## Координаты
 
-См. также: [Клиент и SmartData](client-and-smartdata.md), [Топология](topology.md).
+```python
+from simpleworkernet import GeoPoint
+
+a = GeoPoint(55.75, 37.62)
+b = GeoPoint(55.76, 37.63)
+print(a.distance_to(b))           # км
+x, y = b.to_xy(center=a)          # mercator relative + cos(lat)
+```
+
+Далее: [Клиент и SmartData](https://github.com/busy4beaver/simpleworkernet/blob/main/docs/client-and-smartdata.md), [Топология](https://github.com/busy4beaver/simpleworkernet/blob/main/docs/topology.md).
