@@ -6,7 +6,7 @@
 
 ```python
 from simpleworkernet import GeoPoint, GeoPointArray
-from simpleworkernet.models.primitives import LEGACY_TO_KM, HAS_PYPROJ
+from simpleworkernet.models.primitives import HAS_PYPROJ
 ```
 
 ## Создание GeoPoint
@@ -57,7 +57,7 @@ to_xy(
     auto_scale_mercator=True,
     correct_grid_north=None,   # default: True для utm + center + not absolute
     rotation_deg=0.0,
-    legacy=False,
+    legacy=False,                # для тестов / не использовать в product
 ) -> tuple[float, float]
 ```
 
@@ -104,7 +104,7 @@ x, y = p.to_xy(center=origin)                              # mercator + cos
 x, y = p.to_xy(center=origin, projection="local")          # ENU
 x, y = p.to_xy(center=origin, auto_scale_mercator=False)
 x, y = p.to_xy(absolute=True, auto_scale_mercator=False)
-x, y = p.to_xy(center=origin, legacy=True)                 # AUTOCAD
+x, y = p.to_xy(center=origin, legacy=True)                 # для тестов / не использовать в product
 x, y = p.to_xy(center=origin, projection="utm")            # нужен pyproj
 
 back = GeoPoint.from_xy(x, y, center=origin)
