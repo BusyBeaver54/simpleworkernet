@@ -42,10 +42,6 @@ Web Mercator завышает наземные расстояния в `1/cos(φ
 
 Для тайлов OSM/Google: `absolute=True`, `auto_scale_mercator=False` (EPSG:3857-like).
 
-## Legacy AUTOCAD
-
-`legacy=True` — старый AUTOCAD GPS: абсолютный mercator × `LEGACY_TO_KM` (0.6194 ≈ cos(51.73°)), вместо relative × cos(lat).
-
 ## Методы GeoPoint
 
 ### `to_xy(...)`
