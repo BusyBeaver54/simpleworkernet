@@ -19,7 +19,7 @@ Python-клиент для REST API [WorkerNet](https://workernet.ru) с тип�
 | **Кэш полей** | LFU / LRU / FIFO, dirty-flag, предзагрузка из моделей |
 | **Топология** | CGraph + FNGraph, фильтры, линейные цепочки, save/load |
 | **Attenuation** | Расчёт оптических затуханий по CGraph (fiber / splitter / splice / adapter) |
-| **Координаты** | WGS84 ↔ Mercator (default) / local ENU / UTM; `legacy` для AUTOCAD |
+| **Координаты** | WGS84 ↔ Mercator (default) / local ENU / UTM |
 | **Графика** | SVG → PNG (Wand / Cairo / Inkscape / WeasyPrint) |
 | **Cleanup CLI** | `cleanup-simpleworkernet` — логи, кэш, конфиг |
 
