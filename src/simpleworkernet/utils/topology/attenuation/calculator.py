@@ -10,6 +10,7 @@ from .calculator_path import AttenuationPathMixin
 from .calculator_edge import AttenuationEdgeMixin
 from .calculator_build import AttenuationBuildMixin
 from .calculator_fn import AttenuationFNMixin
+from .calculator_fiber import AttenuationFiberMixin
 from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
@@ -17,6 +18,7 @@ VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
 class Attenuation(
     AttenuationBuildMixin,
     AttenuationFNMixin,
+    AttenuationFiberMixin,
     AttenuationSegmentsMixin,
     AttenuationEdgeMixin,
     AttenuationPathMixin,
@@ -62,6 +64,7 @@ class Attenuation(
             self._require_fiber_port(
                 obj1_type, obj1_id, obj1_port,
                 obj2_type, obj2_id, obj2_port,
+                obj1_side=obj1_side, obj2_side=obj2_side,
             )
             self._ensure_cgraph(
                 obj1_type, obj1_id, obj2_type, obj2_id,

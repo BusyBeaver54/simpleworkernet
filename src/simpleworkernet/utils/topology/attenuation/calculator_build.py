@@ -1,8 +1,5 @@
 # simpleworkernet/utils/topology/attenuation/calculator_build.py
-"""CGraph ensure/build for Attenuation.
-
-fiber↔fiber: FNGraph между сооружениями → CGraph по ОВ коридора.
-"""
+"""CGraph ensure/build for Attenuation."""
 from __future__ import annotations
 from typing import Any, List, Optional, Union
 from .errors import AttenuationError
@@ -100,14 +97,12 @@ class AttenuationBuildMixin:
         if not has_obj(self.g, obj1_type, obj1_id):
             raise AttenuationError(
                 f"объект не найден в графе после построения: {obj1_type}:{obj1_id} "
-                f"(есть {obj2_type}:{obj2_id}, но связать не удалось — "
-                f"проверьте номер ОВ (port) / сторону или постройте CGraph вручную)"
+                f"(есть {obj2_type}:{obj2_id}, но связать не удалось)"
             )
         if not has_obj(self.g, obj2_type, obj2_id):
             raise AttenuationError(
                 f"объект не найден в графе после построения: {obj2_type}:{obj2_id} "
-                f"(есть {obj1_type}:{obj1_id}, но связать не удалось — "
-                f"проверьте номер ОВ (port) / сторону или постройте CGraph вручную)"
+                f"(есть {obj1_type}:{obj1_id}, но связать не удалось)"
             )
 
     def _build_cgraph_from(
@@ -135,6 +130,7 @@ class AttenuationBuildMixin:
 
     def _require_fiber_port(
         self, obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
+        obj1_side=None, obj2_side=None,
     ) -> None:
         from ..constants import TYPE_FIBER
         if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
@@ -142,6 +138,12 @@ class AttenuationBuildMixin:
                 raise AttenuationError(
                     "для расчёта между кабелями укажите номер ОВ (port) "
                     f"хотя бы у одного конца (fiber:{obj1_id} / fiber:{obj2_id})"
+                )
+            if obj1_side is None or obj2_side is None:
+                raise AttenuationError(
+                    "для расчёта между кабелями укажите side (сторону) "
+                    f"у обоих концов (fiber:{obj1_id} side={obj1_side}, "
+                    f"fiber:{obj2_id} side={obj2_side})"
                 )
 
     def _pick_endpoint_pair(
@@ -151,7 +153,6 @@ class AttenuationBuildMixin:
         obj1_side=None, obj1_port=None,
         obj2_side=None, obj2_port=None,
     ):
-        """side — сторона кабеля; без side — ближайшие стороны."""
         def candidates(otype, oid, side, port):
             hits = self.find_vertices(otype, oid, side=side, port=port)
             if hits:
@@ -203,6 +204,5 @@ class AttenuationBuildMixin:
         if best is not None:
             return best[1], best[2]
         raise AttenuationError(
-            f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id} "
-            f"(вершины есть, пути нет — разные компоненты или неверный номер ОВ)"
+            f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
         )
