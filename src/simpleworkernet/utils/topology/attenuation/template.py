@@ -16,13 +16,12 @@ from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 from urllib.parse import urlparse
 from .catalog import AttenuationCatalog
-from .catalog_helpers import guess_ratio_key
+from .catalog_helpers import guess_ratio_key, ports_from_ratio_key
 from .template_fetch import (
     fetch_cables, section_ids_by_names, fetch_catalog_items, fetch_topology_splitters,
 )
 
 def _shared_config_dir() -> Path:
-    """Общий каталог simpleworkernet (без имени приложения)."""
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     elif sys.platform == "darwin":
@@ -36,11 +35,6 @@ def _safe_key(key: str) -> str:
     return s.strip("._") or "default"
 
 def client_file_key(client: Any = None, client_key: Optional[str] = None) -> str:
-    """Ключ файла: явный client_key → host из WorkerNetClient._url → default.
-
-    Нельзя использовать getattr(client, "host") — у WorkerNetClient.__getattr__
-    перехватывает любые имена и возвращает DynamicCategory.
-    """
     if client_key:
         return _safe_key(client_key)
     if client is None:
@@ -62,7 +56,6 @@ def attenuation_json_path(
     path: Optional[Union[str, Path]] = None,
     client_key: Optional[str] = None,
 ) -> Path:
-    """Путь: <shared>/attenuation_<host>.json (или явный path/client_key)."""
     if path is not None:
         return Path(path)
     key = client_file_key(client, client_key)
@@ -82,20 +75,13 @@ def load_attenuation_catalog(
 def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
     sp_items = cat._splitter_items()
     by_cat = {str(e.get("catalog_id")): e for e in sp_items if e.get("catalog_id") and not e.get("id")}
-    by_ratio = cat._data.get("splitters", {}).get("by_ratio", {})
     for it in items:
         cid = getattr(it, "id", None)
         if cid is None:
             continue
         name = str(getattr(it, "name", "") or "").strip()
         ratio = guess_ratio_key(name) if name else None
-        ports = {}
-        if auto_fill_ratio and ratio and ratio in by_ratio:
-            r = by_ratio[ratio]
-            if r.get("ports"):
-                ports = copy.deepcopy(r["ports"])
-            elif r.get("equal_db"):
-                ports = {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
+        ports = ports_from_ratio_key(ratio) if auto_fill_ratio and ratio else {}
         entry = by_cat.get(str(cid))
         if entry is None:
             entry = {"catalog_id": str(cid), "name": name, "ratio": ratio or "", "ports": {}}
@@ -140,10 +126,6 @@ def generate_template(
     include_topology_splitters=False,
     overwrite=False,
 ) -> AttenuationCatalog:
-    """Создать attenuation_<host>.json.
-
-    splitter_catalog_names — обязательный: имена секций ТМЦ, напр. (\"PLC\", \"FBT\").
-    """
     if not splitter_catalog_names:
         raise ValueError(
             "splitter_catalog_names обязателен, например (\"PLC\", \"FBT\")"
@@ -177,10 +159,6 @@ def update_template(
     auto_fill_ratio=True,
     include_topology_splitters=False,
 ) -> AttenuationCatalog:
-    """Дописать новые объекты из БД этого клиента (не затирая правки).
-
-    splitter_catalog_names — обязательный: имена секций ТМЦ, напр. (\"PLC\", \"FBT\").
-    """
     if not splitter_catalog_names:
         raise ValueError(
             "splitter_catalog_names обязателен, например (\"PLC\", \"FBT\")"

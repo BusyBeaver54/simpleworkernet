@@ -1,5 +1,5 @@
 # simpleworkernet/utils/topology/attenuation/catalog_splitters.py
-"""Splitter profiles: unified items list + by_ratio + force."""
+"""Splitter profiles: unified items list + force."""
 from __future__ import annotations
 from .catalog_helpers import _as_db_pair
 
@@ -79,11 +79,6 @@ class CatalogSplittersMixin:
         entry["ports"] = self._normalize_ports(ports)
         if ratio:
             entry["ratio"] = ratio
-
-    def set_splitter_by_ratio(self, ratio_key, *, ports):
-        self._data.setdefault("splitters", {}).setdefault("by_ratio", {})[ratio_key] = {
-            "ports": self._normalize_ports(ports)
-        }
 
     def set_splitter_instance(self, splitter_id, *, ports):
         entry = self._find_splitter(splitter_id=splitter_id)
