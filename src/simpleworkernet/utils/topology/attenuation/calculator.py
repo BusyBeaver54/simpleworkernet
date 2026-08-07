@@ -62,27 +62,20 @@ class Attenuation(
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
-            v1 = self.find_vertex(obj1_type, obj1_id, side=obj1_side, port=obj1_port)
-            if v1 is None:
-                hits = self.find_vertices(obj1_type, obj1_id)
-                v1 = hits[0] if hits else None
-            v2 = self.find_vertex(obj2_type, obj2_id, side=obj2_side, port=obj2_port)
-            if v2 is None:
-                hits = self.find_vertices(obj2_type, obj2_id)
-                v2 = hits[0] if hits else None
-            if v1 is None:
-                raise AttenuationError(f"объект не найден в графе: {obj1_type}:{obj1_id}")
-            if v2 is None:
-                raise AttenuationError(f"объект не найден в графе: {obj2_type}:{obj2_id}")
+            v1, v2 = self._pick_endpoint_pair(
+                obj1_type, obj1_id, obj2_type, obj2_id,
+                obj1_side=obj1_side, obj1_port=obj1_port,
+                obj2_side=obj2_side, obj2_port=obj2_port,
+            )
+            if v1 == v2:
+                return PathReport(
+                    wavelength_nm=self.wavelength,
+                    from_label=_label_vertex(self._vertex_attrs(v1)),
+                    to_label=_label_vertex(self._vertex_attrs(v2)),
+                    total_db=0.0, vertex_path=[v1],
+                )
             vpath = self.shortest_path(v1, v2)
             if not vpath or len(vpath) < 2:
-                if v1 == v2:
-                    return PathReport(
-                        wavelength_nm=self.wavelength,
-                        from_label=_label_vertex(self._vertex_attrs(v1)),
-                        to_label=_label_vertex(self._vertex_attrs(v2)),
-                        total_db=0.0, vertex_path=[v1],
-                    )
                 raise AttenuationError(
                     f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
                 )
