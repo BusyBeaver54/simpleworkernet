@@ -9,12 +9,14 @@ from .calculator_segments import AttenuationSegmentsMixin, _label_vertex
 from .calculator_path import AttenuationPathMixin
 from .calculator_edge import AttenuationEdgeMixin
 from .calculator_build import AttenuationBuildMixin
+from .calculator_fn import AttenuationFNMixin
 from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
 
 class Attenuation(
     AttenuationBuildMixin,
+    AttenuationFNMixin,
     AttenuationSegmentsMixin,
     AttenuationEdgeMixin,
     AttenuationPathMixin,
@@ -53,9 +55,9 @@ class Attenuation(
     ) -> PathReport:
         """Затухание между двумя объектами.
 
-        side — сторона кабеля (1|2), не направление сигнала.
-        Без side — ближайшие стороны (кратчайший путь).
-        port для fiber — номер ОВ; для fiber↔fiber нужен хотя бы у одного конца.
+        fiber↔fiber: FNGraph между сооружениями → CGraph по ОВ коридора.
+        side — сторона кабеля; без side — ближайшие стороны.
+        port — номер ОВ (нужен хотя бы у одного конца для fiber↔fiber).
         """
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
