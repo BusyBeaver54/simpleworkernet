@@ -3,12 +3,14 @@
 from __future__ import annotations
 from typing import Any, List, Optional, Set
 
+
 def _log():
     try:
         from ....core.logger import log
         return log
     except Exception:
         return None
+
 
 def _as_list(result) -> list:
     if result is None:
@@ -30,6 +32,7 @@ def _as_list(result) -> list:
         return [result]
     return []
 
+
 class AttenuationFiberMixin:
     def _load_fiber(self, fiber_id: int) -> Any:
         """client.Fiber.get_list(object_id=...) → объект с node1_id/node2_id."""
@@ -45,17 +48,14 @@ class AttenuationFiberMixin:
                     lg.debug(f"cache.get_fiber({fid}) failed: {e}")
 
         if fiber is not None:
-            n1 = self._fiber_attr(fiber, "node1_id")
-            n2 = self._fiber_attr(fiber, "node2_id")
-            if n1 is not None or n2 is not None:
-                if lg:
-                    lg.info(f"fiber {fid} from cache: node1_id={n1} node2_id={n2}")
+            if (
+                self._fiber_attr(fiber, "node1_id") is not None
+                or self._fiber_attr(fiber, "node2_id") is not None
+            ):
                 return fiber
             fiber = None
 
         if self.client is None:
-            if lg:
-                lg.warning(f"fiber {fid}: нет client")
             return None
 
         try:
@@ -71,13 +71,12 @@ class AttenuationFiberMixin:
                         f"code={self._fiber_attr(fiber, 'code')}"
                     )
                 return fiber
-            if lg:
-                lg.warning(
-                    f"Fiber.get_list(object_id={fid}) пустой ответ: {type(result)}"
-                )
         except Exception as e:
             if lg:
                 lg.warning(f"Fiber.get_list(object_id={fid}) failed: {e}")
+
+        if lg:
+            lg.warning(f"не удалось загрузить fiber object_id={fid}")
         return None
 
     def _fiber_attr(self, fiber: Any, name: str):
