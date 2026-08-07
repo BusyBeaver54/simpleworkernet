@@ -1,5 +1,8 @@
 # simpleworkernet/utils/topology/attenuation/calculator_build.py
-"""CGraph ensure/build for Attenuation."""
+"""CGraph ensure/build for Attenuation.
+
+fiber↔fiber: FNGraph между сооружениями → CGraph по ОВ коридора.
+"""
 from __future__ import annotations
 from typing import Any, List, Optional, Union
 from .errors import AttenuationError
@@ -35,17 +38,35 @@ class AttenuationBuildMixin:
                 "CGraph не задан и нет client — невозможно построить граф"
             )
 
+        from ..constants import TYPE_FIBER
+
+        if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
+            cg = self._build_cgraph_via_fngraph(
+                int(obj1_id), int(obj2_id),
+                port1=obj1_port, port2=obj2_port,
+                side1=obj1_side, side2=obj2_side,
+            )
+            if cg is not None and has_obj(cg, obj1_type, obj1_id) and has_obj(
+                cg, obj2_type, obj2_id
+            ):
+                self.g = cg
+                return
+
         g1 = self._build_cgraph_from(
             obj1_type, obj1_id, side=obj1_side, port=obj1_port
         )
-        if g1 is not None and has_obj(g1, obj1_type, obj1_id) and has_obj(g1, obj2_type, obj2_id):
+        if g1 is not None and has_obj(g1, obj1_type, obj1_id) and has_obj(
+            g1, obj2_type, obj2_id
+        ):
             self.g = g1
             return
 
         g2 = self._build_cgraph_from(
             obj2_type, obj2_id, side=obj2_side, port=obj2_port
         )
-        if g2 is not None and has_obj(g2, obj1_type, obj1_id) and has_obj(g2, obj2_type, obj2_id):
+        if g2 is not None and has_obj(g2, obj1_type, obj1_id) and has_obj(
+            g2, obj2_type, obj2_id
+        ):
             self.g = g2
             return
 
@@ -54,8 +75,10 @@ class AttenuationBuildMixin:
             try:
                 from ..merge import merge_cgraphs
                 merged = merge_cgraphs(candidates, self.client, self.cache)
-                if merged is not None and has_obj(merged, obj1_type, obj1_id) and has_obj(
-                    merged, obj2_type, obj2_id
+                if (
+                    merged is not None
+                    and has_obj(merged, obj1_type, obj1_id)
+                    and has_obj(merged, obj2_type, obj2_id)
                 ):
                     self.g = merged
                     return
@@ -111,17 +134,14 @@ class AttenuationBuildMixin:
         return cg
 
     def _require_fiber_port(
-        self,
-        obj1_type, obj1_id, obj1_port,
-        obj2_type, obj2_id, obj2_port,
+        self, obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
     ) -> None:
         from ..constants import TYPE_FIBER
         if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
             if obj1_port is None and obj2_port is None:
                 raise AttenuationError(
                     "для расчёта между кабелями укажите номер ОВ (port) "
-                    f"хотя бы у одного конца "
-                    f"(fiber:{obj1_id} / fiber:{obj2_id})"
+                    f"хотя бы у одного конца (fiber:{obj1_id} / fiber:{obj2_id})"
                 )
 
     def _pick_endpoint_pair(
@@ -131,12 +151,7 @@ class AttenuationBuildMixin:
         obj1_side=None, obj1_port=None,
         obj2_side=None, obj2_port=None,
     ):
-        """Пара вершин с путём.
-
-        side — сторона кабеля (1|2), не направление сигнала.
-        Если side не задан — пара ближайших сторон (кратчайший путь).
-        port для fiber — номер ОВ.
-        """
+        """side — сторона кабеля; без side — ближайшие стороны."""
         def candidates(otype, oid, side, port):
             hits = self.find_vertices(otype, oid, side=side, port=port)
             if hits:
