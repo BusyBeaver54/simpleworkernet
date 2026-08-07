@@ -73,7 +73,7 @@ def load_attenuation_catalog(
     return AttenuationCatalog.with_defaults()
 
 def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
-    sp_items = cat._splitter_items()
+    sp_items = cat._splitters()
     by_cat = {str(e.get("catalog_id")): e for e in sp_items if e.get("catalog_id") and not e.get("id")}
     for it in items:
         cid = getattr(it, "id", None)
