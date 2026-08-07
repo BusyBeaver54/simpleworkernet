@@ -1,99 +1,59 @@
 # Оптические затухания (Attenuation)
 
-Расчёт **по запросу** (не при `build` топологии) по уже построенному **CGraph**.
+Расчёт **по запросу** по уже построенному **CGraph**.
 
-```python
-from simpleworkernet.utils.topology import (
-    Topology, Attenuation, AttenuationCatalog, PathReport,
-)
-from simpleworkernet.utils.topology.attenuation.template import generate_template
+## Пользовательский каталог (attenuation.json)
+
+Файл **не хранится в пакете**. Генерируется из БД и лежит рядом с `config.json`:
+
+```
+~/.config/simpleworkernet/<app>/attenuation.json   # Linux
 ```
 
-## Типичный сценарий
-
 ```python
-topo = Topology(client)
-topo.build_from_device("olt", 12345, port=1)
-linear = topo.topology_from_commutation("customer", customer_id)
-
-cat = AttenuationCatalog.with_defaults()
-# cat = AttenuationCatalog.from_json("my_profiles.json")
-# cat.force_fiber(23682, 0.20)
-# cat.force_splitter_port(35196, port=3, db=10.5)
-
-att = Attenuation(
-    linear.cgraphs[0],
-    catalog=cat,
-    wavelength=1550,
-    cache=topo._cache,
-    client=client,
+from simpleworkernet.utils.topology.attenuation import (
+    generate_template, update_template, load_attenuation_catalog,
+    attenuation_json_path, Attenuation,
 )
+
+# Первый раз: кабели + сплиттеры из БД, ratio/α из встроенных defaults
+cat = generate_template(client, cache=topo._cache)
+print(attenuation_json_path())  # куда сохранился
+
+# Позже: проверить БД, добавить только новое (правки ports/db_per_km сохраняются)
+cat = update_template(client, cache=topo._cache)
+
+# Для расчёта
+cat = load_attenuation_catalog()
+att = Attenuation(cgraph, catalog=cat, wavelength=1550)
 report = att.olt_to_customer(customer_id)
-print(report.to_table())
-print(report.total_db, report.by_kind())
 ```
 
-## Attenuation — методы расчёта
+| Функция | Поведение |
+|---------|-----------|
+| `generate_template(client)` | Создать JSON. Если файл уже есть → как `update_template` |
+| `update_template(client)` | Дописать новые кабели/сплиттеры из БД, не затирая заполненное |
+| `load_attenuation_catalog()` | Загрузить JSON (или встроенные ratio, если файла нет) |
+| `attenuation_json_path()` | Путь к файлу |
+
+Встроенный `defaults.json` в пакете — только seed ratio (1x2 5/95…) и α волокна.
+Реальные имена кабелей/сплиттеров подтягиваются из WorkerNet.
+
+`force_fiber` / `force_splitter_port` / `force_cross` — overrides по id поверх JSON.
+
+## Attenuation — методы
 
 | Метод | Назначение |
 |-------|------------|
 | `path(src, dst)` | Shortest path + сумма сегментов |
-| `along_linear()` | Обход линейного CGraph по порядку |
+| `along_linear()` | Обход линейного CGraph |
 | `olt_to_customer(id)` | Downstream OLT → абонент |
 | `customer_to_olt(id)` | Upstream |
-| `olt_to_splitter_out(id, port)` | До выхода сплиттера |
-| `budget_summary()` | Сводка по абонентам графа |
-| `worst_customer()` | Худший бюджет |
+| `budget_summary()` | Сводка по абонентам |
 
 ## PathReport
 
-| Атрибут / метод | Описание |
-|-----------------|----------|
-| `total_db` | Суммарное затухание, дБ |
-| `segments` | Список `AttenuationSegment` |
-| `warnings` / `missing` | Предупреждения и отсутствующие данные |
-| `to_table()` | Текстовая таблица сегментов |
-| `to_dict()` | Сериализация |
-| `by_kind()` | Суммы по типам сегментов |
+`total_db`, `segments`, `to_table()`, `by_kind()`, `warnings` / `missing`.
 
-## Сегменты пути (`kind`)
-
-| kind | Источник |
-|------|----------|
-| `fiber` | α(дБ/км) × L(км); L: opticalen2 → opticalen → geo×k → geo_api |
-| `splitter` | порт OUT (side=2): force → instance → catalog → ratio → estimate |
-| `adapter` | internal-ребро кросса |
-| `splice` / `connector` | внешние стыки |
-| `force` | override на connect_id / fiber / splitter port |
-
-Эвристика сплиттера: side1 ≈ in, side2 ≈ out; путь идёт вдоль линейного CGraph.
-
-## AttenuationCatalog
-
-| Метод | Описание |
-|-------|----------|
-| `with_defaults()` | Каталог из встроенного `defaults.json` |
-| `from_json(path)` | Загрузка пользовательского JSON |
-| `force_fiber(id, db_per_km)` | Жёсткий α для волокна |
-| `force_splitter_port(id, port, db)` | Жёсткое затухание порта |
-
-### Defaults (`defaults.json`)
-
-| Параметр | 1310 nm | 1490 nm | 1550 nm |
-|----------|---------|---------|----------|
-| fiber дБ/км | 0.35 | 0.28 | 0.22 |
-| splice | 0.05 дБ | | |
-| connector | 0.30 дБ | | |
-| adapter | 0.20 дБ | | |
-| geo_slack_k | 1.03 | | |
-| splitter_excess | 0.5 дБ | | |
-
-Типовые ratio-профили: `1x2_50/50`, `1x2_5/95`, …, `1x4_equal`, `1x8_equal`.
-
-## Шаблон из live API
-
-```python
-cat = generate_template(client, cache=topo._cache, path="attenuation.json")
-# дозаполнить ports / db_per_km вручную, затем:
-cat = AttenuationCatalog.from_json("attenuation.json")
-```
+Приоритет сплиттера: force → instance → catalog_id → catalog_name → ratio → estimate.
+Если λ нет в таблице — ближайшая + `log.info`.
