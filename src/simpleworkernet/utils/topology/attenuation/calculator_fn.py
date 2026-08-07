@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator_fn.py
-"""FNGraph corridor → CGraph for fiber↔fiber attenuation."""
+"""FNGraph corridor → CGraph for fiber↔fiber."""
 from __future__ import annotations
-from typing import Any, List, Optional, Set
+from typing import Any, Set
 
 def _log():
     try:
@@ -11,127 +11,71 @@ def _log():
         return None
 
 class AttenuationFNMixin:
-    def _load_fiber(self, fiber_id: int) -> Any:
-        fid = int(fiber_id)
-        fiber = None
-        if self.cache is not None and self.client is not None:
-            try:
-                fiber = self.cache.get_fiber(self.client, fid)
-            except Exception as e:
-                lg = _log()
-                if lg:
-                    lg.debug(f"cache.get_fiber({fid}) failed: {e}")
-        if fiber is None and self.client is not None:
-            try:
-                result = self.client.Fiber.get_list(object_id=fid)
-                items = result if isinstance(result, list) else (
-                    getattr(result, "items", None)
-                    or getattr(result, "data", None)
-                    or []
-                )
-                if items:
-                    fiber = items[0]
-            except Exception as e:
-                lg = _log()
-                if lg:
-                    lg.debug(f"Fiber.get_list({fid}) failed: {e}")
-        return fiber
-
-    def _fiber_nodes(self, fiber_id: int) -> List[int]:
-        fiber = self._load_fiber(fiber_id)
-        if fiber is None:
-            return []
-        nodes = []
-        for attr in ("node1_id", "node2_id"):
-            n = getattr(fiber, attr, None)
-            if n is None and isinstance(fiber, dict):
-                n = fiber.get(attr)
-            if n is not None:
-                nodes.append(int(n))
-        return nodes
-
-    def _fiber_code(self, fiber_id: int) -> Optional[int]:
-        fiber = self._load_fiber(fiber_id)
-        if fiber is None:
-            return int(fiber_id)
-        code = getattr(fiber, "code", None)
-        if code is None and isinstance(fiber, dict):
-            code = fiber.get("code")
-        return int(code) if code is not None else int(fiber_id)
-
     def _build_cgraph_via_fngraph(
-        self,
-        fiber1_id: int,
-        fiber2_id: int,
-        *,
-        port1=None,
-        port2=None,
-        side1=None,
-        side2=None,
+        self, fiber1_id: int, fiber2_id: int, *,
+        port1=None, port2=None, side1=None, side2=None,
     ) -> Any:
         from ..graphs.cgraph import CGraph
         from ..graphs.fngraph import FNGraph
-
         lg = _log()
-        nodes1 = self._fiber_nodes(fiber1_id)
-        nodes2 = self._fiber_nodes(fiber2_id)
+        fiber1_id, fiber2_id = int(fiber1_id), int(fiber2_id)
+
+        start_node = self._fiber_side_node(fiber1_id, side1) if side1 is not None else None
+        end_node = self._fiber_side_node(fiber2_id, side2) if side2 is not None else None
+        if start_node is None:
+            ns = self._fiber_nodes(fiber1_id)
+            start_node = ns[0] if ns else None
+        if end_node is None:
+            ns = self._fiber_nodes(fiber2_id)
+            end_node = ns[-1] if ns else None
         if lg:
             lg.info(
-                f"FN-corridor: fiber {fiber1_id} nodes={nodes1}, "
-                f"fiber {fiber2_id} nodes={nodes2}"
+                f"FN-corridor: fiber {fiber1_id} side={side1} → node {start_node}; "
+                f"fiber {fiber2_id} side={side2} → node {end_node}"
             )
-        if not nodes1 or not nodes2:
-            if lg:
-                lg.warning("FN-corridor: не удалось получить node_id кабелей")
+        if start_node is None or end_node is None:
+            if lg: lg.warning("FN-corridor: нет node_id для сторон кабелей")
             return None
 
         fn = FNGraph(self.client, cache=self.cache)
-        built = False
-        for start in nodes1 + nodes2:
-            try:
-                fn = FNGraph(self.client, cache=self.cache)
-                fn.build(start)
-                if fn.vcount() > 0:
-                    built = True
-                    break
-            except Exception as e:
-                if lg:
-                    lg.debug(f"FNGraph.build({start}) failed: {e}")
-        if not built or fn.vcount() == 0:
-            if lg:
-                lg.warning("FN-corridor: FNGraph пустой")
+        try:
+            fn.build(start_node)
+        except Exception as e:
+            if lg: lg.warning(f"FNGraph.build({start_node}) failed: {e}")
+            return None
+        if fn.vcount() == 0:
+            if lg: lg.warning("FN-corridor: FNGraph пустой")
             return None
 
         node_to_v = {int(v["node_id"]): v.index for v in fn.vs}
-        if lg:
-            lg.info(f"FN-corridor: FNGraph {fn.vcount()} nodes, {fn.ecount()} edges")
-
-        best_path = None
-        for n1 in nodes1:
-            for n2 in nodes2:
-                if n1 not in node_to_v or n2 not in node_to_v:
-                    continue
-                try:
-                    paths = fn.get_shortest_paths(node_to_v[n1], node_to_v[n2])
-                except Exception as e:
-                    if lg:
-                        lg.debug(f"FN path {n1}->{n2}: {e}")
-                    continue
-                if paths and paths[0]:
-                    if best_path is None or len(paths[0]) < len(best_path):
-                        best_path = paths[0]
-        if not best_path:
+        if start_node not in node_to_v or end_node not in node_to_v:
+            try:
+                fn2 = FNGraph(self.client, cache=self.cache)
+                fn2.build(end_node)
+                if fn2.vcount() > 0:
+                    fn = fn2
+                    node_to_v = {int(v["node_id"]): v.index for v in fn.vs}
+            except Exception:
+                pass
+        if start_node not in node_to_v or end_node not in node_to_v:
             if lg:
-                lg.warning(
-                    f"FN-corridor: нет пути FN между nodes {nodes1} и {nodes2}"
-                )
+                lg.warning(f"FN-corridor: узлы {start_node}/{end_node} не в FNGraph")
             return None
+
+        try:
+            paths = fn.get_shortest_paths(node_to_v[start_node], node_to_v[end_node])
+        except Exception as e:
+            if lg: lg.warning(f"FN path failed: {e}")
+            return None
+        if not paths or not paths[0]:
+            if lg: lg.warning(f"FN-corridor: нет пути {start_node} → {end_node}")
+            return None
+        best_path = paths[0]
         if lg:
-            path_nodes = [fn.vs[i]["node_id"] for i in best_path]
-            lg.info(f"FN-corridor: path nodes={path_nodes}")
+            lg.info(f"FN-corridor: path nodes={[fn.vs[i]['node_id'] for i in best_path]}")
 
         corridor: Set[int] = {
-            int(fiber1_id), int(fiber2_id),
+            fiber1_id, fiber2_id,
             self._fiber_code(fiber1_id), self._fiber_code(fiber2_id),
         }
         for a, b in zip(best_path, best_path[1:]):
@@ -144,64 +88,38 @@ class AttenuationFNMixin:
             fid = fn.es[eid].attributes().get("fiber_id")
             if fid is not None:
                 corridor.add(int(fid))
+
+        end_cables = self._fibers_at_node(end_node)
+        excluded: Set[int] = {fid for fid in end_cables if fid not in corridor}
         if lg:
-            lg.info(f"FN-corridor: included_fibers={sorted(corridor)}")
+            lg.info(
+                f"FN-corridor: included={sorted(corridor)}, "
+                f"excluded_at_end={sorted(excluded)[:30]}"
+            )
 
         port = port1 if port1 is not None else port2
-
-        for start_fid, p, s in (
+        attempts = [
             (fiber1_id, port1 if port1 is not None else port, side1),
             (fiber2_id, port2 if port2 is not None else port, side2),
-            (fiber1_id, port, None),
-            (fiber2_id, port, None),
-        ):
+        ]
+        for start_fid, p, s in attempts:
             if p is None:
                 continue
-            cg = CGraph(self.client, cache=self.cache)
-            try:
-                cg.build(
-                    "fiber", start_fid,
-                    port=p, side=s,
-                    included_fibers=corridor,
-                )
-            except Exception as e:
-                if lg:
-                    lg.debug(f"CGraph via FN from {start_fid}: {e}")
-                continue
-            if cg.vcount() == 0:
-                continue
-            ids = {str(v["obj_id"]) for v in cg.vs if v["obj_type"] == "fiber"}
-            if str(fiber1_id) in ids and str(fiber2_id) in ids:
-                if lg:
-                    lg.info(
-                        f"FN-corridor: CGraph ok from fiber:{start_fid} "
-                        f"v={cg.vcount()} e={cg.ecount()}"
-                    )
-                return cg
-            if lg:
-                lg.debug(
-                    f"FN-corridor: CGraph from {start_fid} missing endpoint, "
-                    f"fibers={ids}"
-                )
-
-        for start_fid, p, s in (
-            (fiber1_id, port1 if port1 is not None else port, side1),
-            (fiber2_id, port2 if port2 is not None else port, side2),
-        ):
-            if p is None:
-                continue
-            cg = CGraph(self.client, cache=self.cache)
-            try:
-                cg.build("fiber", start_fid, port=p, side=s)
-            except Exception as e:
-                if lg:
-                    lg.debug(f"CGraph open from {start_fid}: {e}")
-                continue
-            if cg.vcount() == 0:
-                continue
-            ids = {str(v["obj_id"]) for v in cg.vs if v["obj_type"] == "fiber"}
-            if str(fiber1_id) in ids and str(fiber2_id) in ids:
-                if lg:
-                    lg.info(f"CGraph open ok from fiber:{start_fid}")
-                return cg
+            for use_exc in (True, False):
+                cg = CGraph(self.client, cache=self.cache)
+                try:
+                    kw = dict(port=p, side=s, included_fibers=corridor)
+                    if use_exc and excluded:
+                        kw["excluded_fibers"] = excluded
+                    cg.build("fiber", start_fid, **kw)
+                except Exception as e:
+                    if lg: lg.debug(f"CGraph from {start_fid}: {e}")
+                    continue
+                if cg.vcount() == 0:
+                    continue
+                ids = {str(v["obj_id"]) for v in cg.vs if v["obj_type"] == "fiber"}
+                if str(fiber1_id) in ids and str(fiber2_id) in ids:
+                    if lg:
+                        lg.info(f"FN-corridor: CGraph ok from fiber:{start_fid} v={cg.vcount()}")
+                    return cg
         return None
