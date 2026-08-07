@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator_segments.py
 """Segment helpers for Attenuation."""
 from __future__ import annotations
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, Tuple
 from ..constants import TYPE_CUSTOMER, TYPE_OLT, TYPE_SPLITTER
 from .length import resolve_fiber_length_m
 
@@ -48,10 +48,13 @@ class AttenuationSegmentsMixin:
             return ua
         return va
 
-    def _fiber_length(self, fiber_id, fiber_obj):
-        return resolve_fiber_length_m(
-            fiber_id, fiber_obj, self.client, self.cache, self.catalog
-        )
+    def _fiber_length(self, fiber_id, fiber_obj) -> Tuple[Optional[float], str]:
+        slack = 1.03
+        try:
+            slack = float(self.catalog.geo_slack_k())
+        except Exception:
+            pass
+        return resolve_fiber_length_m(fiber_obj, slack_k=slack)
 
     def _splitter_catalog_id(self, splitter_obj: Any) -> Optional[int]:
         if splitter_obj is None:
@@ -59,7 +62,15 @@ class AttenuationSegmentsMixin:
         inv_id = getattr(splitter_obj, "inventory_id", None)
         if inv_id is None or self.cache is None or self.client is None:
             return getattr(splitter_obj, "catalog_id", None)
-        inv = self.cache.get_inventory_item(self.client, int(inv_id))
+        inv = None
+        for name in ("get_inventory_item", "get_inventory"):
+            fn = getattr(self.cache, name, None)
+            if callable(fn):
+                try:
+                    inv = fn(self.client, int(inv_id))
+                    break
+                except Exception:
+                    pass
         if inv is None:
-            return None
+            return getattr(splitter_obj, "catalog_id", None)
         return getattr(inv, "catalog_id", None)
