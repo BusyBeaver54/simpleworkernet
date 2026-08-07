@@ -6,16 +6,8 @@ from .errors import AttenuationError
 
 class AttenuationBuildMixin:
     def _ensure_cgraph(
-        self,
-        obj1_type: str,
-        obj1_id: Union[int, str],
-        obj2_type: str,
-        obj2_id: Union[int, str],
-        *,
-        obj1_side=None,
-        obj1_port=None,
-        obj2_side=None,
-        obj2_port=None,
+        self, obj1_type, obj1_id, obj2_type, obj2_id,
+        *, obj1_side=None, obj1_port=None, obj2_side=None, obj2_port=None,
     ) -> None:
         def has_obj(g, otype, oid) -> bool:
             if g is None:
@@ -49,21 +41,13 @@ class AttenuationBuildMixin:
                 self.g = cg
                 return
 
-        g1 = self._build_cgraph_from(
-            obj1_type, obj1_id, side=obj1_side, port=obj1_port
-        )
-        if g1 is not None and has_obj(g1, obj1_type, obj1_id) and has_obj(
-            g1, obj2_type, obj2_id
-        ):
+        g1 = self._build_cgraph_from(obj1_type, obj1_id, side=obj1_side, port=obj1_port)
+        if g1 is not None and has_obj(g1, obj1_type, obj1_id) and has_obj(g1, obj2_type, obj2_id):
             self.g = g1
             return
 
-        g2 = self._build_cgraph_from(
-            obj2_type, obj2_id, side=obj2_side, port=obj2_port
-        )
-        if g2 is not None and has_obj(g2, obj1_type, obj1_id) and has_obj(
-            g2, obj2_type, obj2_id
-        ):
+        g2 = self._build_cgraph_from(obj2_type, obj2_id, side=obj2_side, port=obj2_port)
+        if g2 is not None and has_obj(g2, obj1_type, obj1_id) and has_obj(g2, obj2_type, obj2_id):
             self.g = g2
             return
 
@@ -72,10 +56,8 @@ class AttenuationBuildMixin:
             try:
                 from ..merge import merge_cgraphs
                 merged = merge_cgraphs(candidates, self.client, self.cache)
-                if (
-                    merged is not None
-                    and has_obj(merged, obj1_type, obj1_id)
-                    and has_obj(merged, obj2_type, obj2_id)
+                if merged is not None and has_obj(merged, obj1_type, obj1_id) and has_obj(
+                    merged, obj2_type, obj2_id
                 ):
                     self.g = merged
                     return
@@ -83,36 +65,24 @@ class AttenuationBuildMixin:
                 pass
 
         for g in (g1, g2, self.g):
-            if g is not None and (
-                has_obj(g, obj1_type, obj1_id) or has_obj(g, obj2_type, obj2_id)
-            ):
+            if g is not None and (has_obj(g, obj1_type, obj1_id) or has_obj(g, obj2_type, obj2_id)):
                 self.g = g
                 break
 
         if self.g is None:
             raise AttenuationError(
-                f"не удалось построить CGraph для "
-                f"{obj1_type}:{obj1_id} / {obj2_type}:{obj2_id}"
+                f"не удалось построить CGraph для {obj1_type}:{obj1_id} / {obj2_type}:{obj2_id}"
             )
         if not has_obj(self.g, obj1_type, obj1_id):
             raise AttenuationError(
-                f"объект не найден в графе после построения: {obj1_type}:{obj1_id} "
-                f"(есть {obj2_type}:{obj2_id}, но связать не удалось)"
+                f"объект не найден в графе после построения: {obj1_type}:{obj1_id}"
             )
         if not has_obj(self.g, obj2_type, obj2_id):
             raise AttenuationError(
-                f"объект не найден в графе после построения: {obj2_type}:{obj2_id} "
-                f"(есть {obj1_type}:{obj1_id}, но связать не удалось)"
+                f"объект не найден в графе после построения: {obj2_type}:{obj2_id}"
             )
 
-    def _build_cgraph_from(
-        self,
-        obj_type: str,
-        obj_id: Union[int, str],
-        *,
-        side: Optional[int] = None,
-        port: Optional[int] = None,
-    ) -> Any:
+    def _build_cgraph_from(self, obj_type, obj_id, *, side=None, port=None) -> Any:
         from ..graphs.cgraph import CGraph
         cg = CGraph(self.client, cache=self.cache)
         try:
@@ -128,30 +98,54 @@ class AttenuationBuildMixin:
             return None
         return cg
 
+    def _require_inputs(
+        self, obj1_type, obj1_id, obj1_port, obj1_side,
+        obj2_type, obj2_id, obj2_port, obj2_side,
+    ) -> None:
+        from ..constants import (
+            TYPE_FIBER, TYPE_CROSS, TYPE_SPLITTER, TYPE_CWDM,
+            TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER,
+        )
+        known = {
+            TYPE_FIBER, TYPE_CROSS, TYPE_SPLITTER, TYPE_CWDM,
+            TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER,
+        }
+        for label, otype, oid in (
+            ("obj1", obj1_type, obj1_id), ("obj2", obj2_type, obj2_id),
+        ):
+            if not otype:
+                raise AttenuationError(f"{label}_type не задан")
+            if oid is None or oid == "":
+                raise AttenuationError(f"{label}_id не задан")
+            if otype not in known:
+                raise AttenuationError(
+                    f"неизвестный тип {label}: {otype!r} (допустимы: {sorted(known)})"
+                )
+        for label, otype, side in (
+            ("obj1", obj1_type, obj1_side), ("obj2", obj2_type, obj2_side),
+        ):
+            if otype == TYPE_FIBER and side is None:
+                raise AttenuationError(
+                    f"для кабеля ({label}) укажите side (1|2) — сторону сооружения"
+                )
+        if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
+            if obj1_port is None and obj2_port is None:
+                raise AttenuationError(
+                    "для fiber↔fiber укажите port (номер ОВ) хотя бы у одного конца"
+                )
+
     def _require_fiber_port(
         self, obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
         obj1_side=None, obj2_side=None,
     ) -> None:
-        from ..constants import TYPE_FIBER
-        if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
-            if obj1_port is None and obj2_port is None:
-                raise AttenuationError(
-                    "для расчёта между кабелями укажите номер ОВ (port) "
-                    f"хотя бы у одного конца (fiber:{obj1_id} / fiber:{obj2_id})"
-                )
-            if obj1_side is None or obj2_side is None:
-                raise AttenuationError(
-                    "для расчёта между кабелями укажите side (сторону) "
-                    f"у обоих концов (fiber:{obj1_id} side={obj1_side}, "
-                    f"fiber:{obj2_id} side={obj2_side})"
-                )
+        self._require_inputs(
+            obj1_type, obj1_id, obj1_port, obj1_side,
+            obj2_type, obj2_id, obj2_port, obj2_side,
+        )
 
     def _pick_endpoint_pair(
-        self,
-        obj1_type, obj1_id, obj2_type, obj2_id,
-        *,
-        obj1_side=None, obj1_port=None,
-        obj2_side=None, obj2_port=None,
+        self, obj1_type, obj1_id, obj2_type, obj2_id,
+        *, obj1_side=None, obj1_port=None, obj2_side=None, obj2_port=None,
     ):
         def candidates(otype, oid, side, port):
             hits = self.find_vertices(otype, oid, side=side, port=port)
@@ -166,18 +160,9 @@ class AttenuationBuildMixin:
         c1 = candidates(obj1_type, obj1_id, obj1_side, obj1_port)
         c2 = candidates(obj2_type, obj2_id, obj2_side, obj2_port)
         if not c1:
-            raise AttenuationError(
-                f"объект не найден в графе: {obj1_type}:{obj1_id}"
-                + (f" side={obj1_side}" if obj1_side is not None else "")
-                + (f" port={obj1_port}" if obj1_port is not None else "")
-            )
+            raise AttenuationError(f"объект не найден в графе: {obj1_type}:{obj1_id}")
         if not c2:
-            raise AttenuationError(
-                f"объект не найден в графе: {obj2_type}:{obj2_id}"
-                + (f" side={obj2_side}" if obj2_side is not None else "")
-                + (f" port={obj2_port}" if obj2_port is not None else "")
-            )
-
+            raise AttenuationError(f"объект не найден в графе: {obj2_type}:{obj2_id}")
         best = None
         for a in c1:
             for b in c2:
@@ -187,18 +172,6 @@ class AttenuationBuildMixin:
                 if not path or len(path) < 2:
                     continue
                 score = len(path)
-                if obj1_side is not None:
-                    try:
-                        if int(self.g.vs[a]["side"]) == int(obj1_side):
-                            score -= 0.01
-                    except Exception:
-                        pass
-                if obj2_side is not None:
-                    try:
-                        if int(self.g.vs[b]["side"]) == int(obj2_side):
-                            score -= 0.01
-                    except Exception:
-                        pass
                 if best is None or score < best[0]:
                     best = (score, a, b)
         if best is not None:
