@@ -1,17 +1,14 @@
 # simpleworkernet/utils/topology/attenuation/catalog_splitters.py
-"""Splitter profiles: unified items list + force."""
+"""Splitter profiles: unified list + force ports."""
 from __future__ import annotations
 from .catalog_helpers import _as_db_pair
 
 class CatalogSplittersMixin:
     def _splitter_items(self) -> list:
-        sp = self._data.setdefault("splitters", {})
-        if "items" not in sp:
-            self._normalize_structure()
-        return sp.setdefault("items", [])
+        return self._splitters()
 
     def _find_splitter(self, *, splitter_id=None, catalog_id=None, catalog_name=None):
-        for entry in self._splitter_items():
+        for entry in self._splitters():
             if splitter_id is not None and str(entry.get("id")) == str(splitter_id):
                 return entry
             if catalog_id is not None and str(entry.get("catalog_id")) == str(catalog_id):
@@ -20,11 +17,11 @@ class CatalogSplittersMixin:
             if catalog_name and str(entry.get("name") or "") == str(catalog_name):
                 return entry
         if catalog_id is not None:
-            for entry in self._splitter_items():
+            for entry in self._splitters():
                 if str(entry.get("catalog_id")) == str(catalog_id):
                     return entry
         if catalog_name:
-            for entry in self._splitter_items():
+            for entry in self._splitters():
                 if str(entry.get("name") or "") == str(catalog_name):
                     return entry
         return None
@@ -61,7 +58,7 @@ class CatalogSplittersMixin:
             entry = {"catalog_id": str(catalog_id), "ports": {}, "ratio": ratio}
             if name:
                 entry["name"] = name
-            self._splitter_items().append(entry)
+            self._splitters().append(entry)
         entry["ports"] = self._normalize_ports(ports)
         if ratio:
             entry["ratio"] = ratio
@@ -75,7 +72,7 @@ class CatalogSplittersMixin:
         entry = self._find_splitter(catalog_name=name)
         if entry is None:
             entry = {"name": name, "ports": {}, "ratio": ratio}
-            self._splitter_items().append(entry)
+            self._splitters().append(entry)
         entry["ports"] = self._normalize_ports(ports)
         if ratio:
             entry["ratio"] = ratio
@@ -84,7 +81,7 @@ class CatalogSplittersMixin:
         entry = self._find_splitter(splitter_id=splitter_id)
         if entry is None:
             entry = {"id": str(splitter_id), "ports": {}}
-            self._splitter_items().append(entry)
+            self._splitters().append(entry)
         entry["ports"] = self._normalize_ports(ports)
 
     def force_splitter_port(self, splitter_id, port, db, *, port_name=None):

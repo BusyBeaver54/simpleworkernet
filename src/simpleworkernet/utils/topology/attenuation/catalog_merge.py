@@ -38,7 +38,7 @@ class CatalogMergeMixin:
     def merge_splitter_inventory(
         self, splitters, inventory_by_id, catalog_by_id, *, auto_fill_ratio=True
     ):
-        items = self._splitter_items()
+        items = self._splitters()
         by_cat = {str(e.get("catalog_id")): e for e in items if e.get("catalog_id") and not e.get("id")}
         by_topo = {str(e.get("id")): e for e in items if e.get("id")}
 

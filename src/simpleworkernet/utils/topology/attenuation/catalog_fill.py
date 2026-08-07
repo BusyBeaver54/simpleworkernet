@@ -1,9 +1,8 @@
 # simpleworkernet/utils/topology/attenuation/catalog_fill.py
 """Backfill missing wavelengths from package ratio_defaults."""
 from __future__ import annotations
-import copy
-from .catalog_helpers import guess_ratio_key, load_ratio_defaults, ports_from_ratio_key, _DEFAULTS_PATH
-import json
+import copy, json
+from .catalog_helpers import guess_ratio_key, ports_from_ratio_key, _DEFAULTS_PATH
 
 def _backfill_att_wl(dst_att, src_att) -> int:
     if not isinstance(dst_att, dict) or not isinstance(src_att, dict):
@@ -22,15 +21,13 @@ class CatalogFillMixin:
         pkg = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
         src_fiber = (pkg.get("defaults") or {}).get("fiber_db_per_km") or {}
         _backfill_att_wl(self.defaults.setdefault("fiber_db_per_km", {}), src_fiber)
-
         for entry in self._cables():
             if entry.get("db_per_km"):
                 added += _backfill_att_wl(entry["db_per_km"], default_fiber or src_fiber)
             else:
                 entry["db_per_km"] = copy.deepcopy(default_fiber or src_fiber)
                 added += len(entry["db_per_km"])
-
-        for entry in self._splitter_items():
+        for entry in self._splitters():
             ratio = entry.get("ratio") or ""
             if not ratio and entry.get("name"):
                 ratio = guess_ratio_key(entry["name"]) or ""
@@ -69,7 +66,7 @@ class CatalogFillMixin:
         for entry in self._cables():
             if not entry.get("db_per_km"):
                 missing.append(f"cable:{entry.get('id') or entry.get('name')}")
-        for entry in self._splitter_items():
+        for entry in self._splitters():
             if not entry.get("ports"):
                 key = entry.get("id") or entry.get("catalog_id") or entry.get("name")
                 missing.append(f"splitter:{key}")
