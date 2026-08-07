@@ -3,17 +3,7 @@
 from __future__ import annotations
 import copy
 from .catalog_helpers import guess_ratio_key
-
-def _ports_from_ratio(by_ratio, ratio):
-    """ports из by_ratio; equal → ключ 'all'."""
-    if not ratio or ratio not in by_ratio:
-        return {}
-    r = by_ratio[ratio]
-    if r.get("ports"):
-        return copy.deepcopy(r["ports"])
-    if r.get("equal_db"):
-        return {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
-    return {}
+from .catalog_fill import _ports_from_ratio, _backfill_att_wl
 
 class CatalogMergeMixin:
     def merge_cable_catalog(self, items):
@@ -33,12 +23,16 @@ class CatalogMergeMixin:
             entry.setdefault("cable_line_type_id", getattr(it, "cable_line_type_id", None))
             if not entry.get("db_per_km"):
                 entry["db_per_km"] = copy.deepcopy(default_table)
+            else:
+                _backfill_att_wl(entry["db_per_km"], default_table)
             if name:
                 named = root["by_name"].setdefault(name, {})
                 named.setdefault("cabletype_id", str(cid))
                 named.setdefault("name", name)
                 if not named.get("db_per_km"):
                     named["db_per_km"] = copy.deepcopy(default_table)
+                else:
+                    _backfill_att_wl(named["db_per_km"], default_table)
 
     def merge_splitter_inventory(
         self, splitters, inventory_by_id, catalog_by_id, *, auto_fill_ratio=True
@@ -47,7 +41,6 @@ class CatalogMergeMixin:
         by_name = self._data.setdefault("splitters", {}).setdefault("by_catalog_name", {})
         by_topo = self._data.setdefault("splitters", {}).setdefault("by_topology", {})
         by_ratio = self._data.get("splitters", {}).get("by_ratio", {})
-
         for sp in splitters:
             sid = getattr(sp, "id", None)
             inv_id = getattr(sp, "inventory_id", None)
@@ -88,24 +81,3 @@ class CatalogMergeMixin:
                 })
                 if ports and not tentry.get("ports"):
                     tentry["ports"] = copy.deepcopy(ports)
-
-    def fill_missing_with_defaults(self):
-        default_table = self.defaults.get("fiber_db_per_km", {})
-        root = self._cables_root()
-        for section in ("by_id", "by_name"):
-            for entry in root.get(section, {}).values():
-                if not entry.get("db_per_km"):
-                    entry["db_per_km"] = copy.deepcopy(default_table)
-
-    def unset_profiles(self):
-        missing = []
-        root = self._cables_root()
-        for section in ("by_id", "by_name"):
-            for key, entry in root.get(section, {}).items():
-                if not entry.get("db_per_km"):
-                    missing.append(f"cable.{section}:{key}")
-        for section in ("by_catalog_id", "by_catalog_name", "by_topology"):
-            for key, entry in (self._data.get("splitters", {}).get(section, {}) or {}).items():
-                if not entry.get("ports"):
-                    missing.append(f"splitter.{section}:{key}")
-        return missing
