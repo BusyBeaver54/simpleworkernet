@@ -2,9 +2,9 @@
 """
 Расчёт оптических затуханий по CGraph (по запросу).
 
-    cat = generate_template(client, catalog_names=("PLC", "FBT"))
+    cat = generate_template(client, ("PLC", "FBT"))
     # → config_dir/attenuation_<host>.json
-    cat = update_template(client, catalog_names=("PLC", "FBT"))
+    cat = update_template(client, ("PLC", "FBT"))
     cat = load_attenuation_catalog(client)
     att = Attenuation(cgraph, catalog=cat, wavelength=1550)
 """

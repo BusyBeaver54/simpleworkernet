@@ -1,10 +1,10 @@
 # simpleworkernet/utils/topology/attenuation/template.py
 """Генерация/обновление attenuation.json в config_dir — отдельный файл на клиента.
 
-    generate_template(client, catalog_names=("PLC", "FBT"))
+    generate_template(client, splitter_catalog_names=("PLC", "FBT"))
     # → ~/.config/simpleworkernet/<app>/attenuation_<host>.json
 
-    update_template(client, catalog_names=("PLC", "FBT"))
+    update_template(client, splitter_catalog_names=("PLC", "FBT"))
     load_attenuation_catalog(client)
 """
 from __future__ import annotations
@@ -103,18 +103,20 @@ def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
             if ports and not nentry.get("ports"):
                 nentry["ports"] = ports
 
-def _apply_db(cat, client, *, cache=None, catalog_names=None,
+def _apply_db(cat, client, *, splitter_catalog_names, cache=None,
               include_topology_splitters=False, fill_defaults=True, auto_fill_ratio=True):
     cat.merge_cable_catalog(fetch_cables(client))
-    if catalog_names:
-        section_ids = section_ids_by_names(client, catalog_names)
-        items = fetch_catalog_items(client, section_ids)
-        _merge_catalog_items(cat, items, auto_fill_ratio=auto_fill_ratio)
-        try:
-            from ....core.logger import log
-            log.info("attenuation: секции %s → %s позиций", list(catalog_names), len(items))
-        except Exception:
-            pass
+    section_ids = section_ids_by_names(client, splitter_catalog_names)
+    items = fetch_catalog_items(client, section_ids)
+    _merge_catalog_items(cat, items, auto_fill_ratio=auto_fill_ratio)
+    try:
+        from ....core.logger import log
+        log.info(
+            "attenuation: секции %s → %s позиций",
+            list(splitter_catalog_names), len(items),
+        )
+    except Exception:
+        pass
     if include_topology_splitters:
         sp_list, inv, cats = fetch_topology_splitters(client, cache)
         cat.merge_splitter_inventory(sp_list, inv, cats, auto_fill_ratio=auto_fill_ratio)
@@ -122,42 +124,75 @@ def _apply_db(cat, client, *, cache=None, catalog_names=None,
         cat.fill_missing_with_defaults()
 
 def generate_template(
-    client, *, catalog_names: Optional[Sequence[str]] = None, cache=None,
-    path=None, client_key: Optional[str] = None,
-    fill_defaults=True, auto_fill_ratio=True,
-    include_topology_splitters=False, overwrite=False,
+    client,
+    splitter_catalog_names: Sequence[str],
+    *,
+    cache=None,
+    path=None,
+    client_key: Optional[str] = None,
+    fill_defaults=True,
+    auto_fill_ratio=True,
+    include_topology_splitters=False,
+    overwrite=False,
 ) -> AttenuationCatalog:
-    """Создать attenuation_<host>.json. catalog_names=(\"PLC\",\"FBT\")."""
+    """Создать attenuation_<host>.json.
+
+    splitter_catalog_names — обязательный: имена секций ТМЦ, напр. (\"PLC\", \"FBT\").
+    """
+    if not splitter_catalog_names:
+        raise ValueError(
+            "splitter_catalog_names обязателен, например (\"PLC\", \"FBT\")"
+        )
     p = attenuation_json_path(client, path=path, client_key=client_key)
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists() and not overwrite:
         return update_template(
-            client, catalog_names=catalog_names, cache=cache, path=p,
-            client_key=client_key, fill_defaults=fill_defaults,
-            auto_fill_ratio=auto_fill_ratio,
+            client, splitter_catalog_names,
+            cache=cache, path=p, client_key=client_key,
+            fill_defaults=fill_defaults, auto_fill_ratio=auto_fill_ratio,
             include_topology_splitters=include_topology_splitters,
         )
     cat = AttenuationCatalog.with_defaults()
-    _apply_db(cat, client, cache=cache, catalog_names=catalog_names,
-              include_topology_splitters=include_topology_splitters,
-              fill_defaults=fill_defaults, auto_fill_ratio=auto_fill_ratio)
+    _apply_db(
+        cat, client, splitter_catalog_names=splitter_catalog_names, cache=cache,
+        include_topology_splitters=include_topology_splitters,
+        fill_defaults=fill_defaults, auto_fill_ratio=auto_fill_ratio,
+    )
     cat.save(p)
     return cat
 
 def update_template(
-    client, *, catalog_names: Optional[Sequence[str]] = None, cache=None,
-    path=None, client_key: Optional[str] = None,
-    fill_defaults=True, auto_fill_ratio=True,
+    client,
+    splitter_catalog_names: Sequence[str],
+    *,
+    cache=None,
+    path=None,
+    client_key: Optional[str] = None,
+    fill_defaults=True,
+    auto_fill_ratio=True,
     include_topology_splitters=False,
 ) -> AttenuationCatalog:
-    """Дописать новые объекты из БД этого клиента (не затирая правки)."""
+    """Дописать новые объекты из БД этого клиента (не затирая правки).
+
+    splitter_catalog_names — обязательный: имена секций ТМЦ, напр. (\"PLC\", \"FBT\").
+    """
+    if not splitter_catalog_names:
+        raise ValueError(
+            "splitter_catalog_names обязателен, например (\"PLC\", \"FBT\")"
+        )
     p = attenuation_json_path(client, path=path, client_key=client_key)
     p.parent.mkdir(parents=True, exist_ok=True)
-    cat = AttenuationCatalog.from_json(p) if p.exists() else AttenuationCatalog.with_defaults()
+    cat = (
+        AttenuationCatalog.from_json(p)
+        if p.exists()
+        else AttenuationCatalog.with_defaults()
+    )
     before = set(cat.unset_profiles())
-    _apply_db(cat, client, cache=cache, catalog_names=catalog_names,
-              include_topology_splitters=include_topology_splitters,
-              fill_defaults=fill_defaults, auto_fill_ratio=auto_fill_ratio)
+    _apply_db(
+        cat, client, splitter_catalog_names=splitter_catalog_names, cache=cache,
+        include_topology_splitters=include_topology_splitters,
+        fill_defaults=fill_defaults, auto_fill_ratio=auto_fill_ratio,
+    )
     cat.save(p)
     try:
         from ....core.logger import log
