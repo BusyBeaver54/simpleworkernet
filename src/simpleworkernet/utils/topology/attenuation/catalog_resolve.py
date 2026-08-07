@@ -2,7 +2,7 @@
 """splitter_port_db resolution with priority chain."""
 from __future__ import annotations
 import math
-from .catalog_helpers import _as_db_pair, _pick_wl, guess_ratio_key
+from .catalog_helpers import _as_db_pair, _pick_wl, guess_ratio_key, ports_from_ratio_key
 
 class CatalogResolveMixin:
     def splitter_port_db(
@@ -69,11 +69,8 @@ class CatalogResolveMixin:
                 ratio_key = guess_ratio_key(catalog_name)
 
         if ratio_key:
-            ratio = self._data.get("splitters", {}).get("by_ratio", {}).get(ratio_key)
-            if ratio:
-                ports = ratio.get("ports") or {}
-                if not ports and ratio.get("equal_db"):
-                    ports = {"all": {"name": "equal", "attenuation": ratio["equal_db"]}}
+            ports = ports_from_ratio_key(ratio_key)
+            if ports:
                 db = self._resolve_port_db(
                     ports, port=port, port_name=port_name,
                     wavelength_nm=wavelength_nm, use_max=use_max,
