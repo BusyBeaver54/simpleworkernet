@@ -7,40 +7,43 @@ from .catalog_fill import _ports_from_ratio, _backfill_att_wl
 
 class CatalogMergeMixin:
     def merge_cable_catalog(self, items):
-        root = self._cables_root()
+        """items — Fiber.Catalog_cables_get. name = model (марка), без brand."""
         default_table = self.defaults.get("fiber_db_per_km", {})
+        cables = self._cables()
+        by_id = {str(e.get("id")): e for e in cables if e.get("id") is not None}
         for it in items:
             cid = getattr(it, "id", None)
             if cid is None:
                 continue
+            # только марка кабеля (model), без производителя
             name = (
-                f"{getattr(it, 'brand', '')} {getattr(it, 'model', '')}".strip()
-                or getattr(it, "name", "") or str(cid)
+                str(getattr(it, "model", "") or "").strip()
+                or str(getattr(it, "name", "") or "").strip()
+                or str(cid)
             )
-            entry = root["by_id"].setdefault(str(cid), {})
+            entry = by_id.get(str(cid))
+            if entry is None:
+                entry = {"id": str(cid), "name": name}
+                cables.append(entry)
+                by_id[str(cid)] = entry
             entry.setdefault("name", name)
+            if not entry.get("name"):
+                entry["name"] = name
             entry.setdefault("fiber_count", getattr(it, "fiber_count", None))
             entry.setdefault("cable_line_type_id", getattr(it, "cable_line_type_id", None))
             if not entry.get("db_per_km"):
                 entry["db_per_km"] = copy.deepcopy(default_table)
             else:
                 _backfill_att_wl(entry["db_per_km"], default_table)
-            if name:
-                named = root["by_name"].setdefault(name, {})
-                named.setdefault("cabletype_id", str(cid))
-                named.setdefault("name", name)
-                if not named.get("db_per_km"):
-                    named["db_per_km"] = copy.deepcopy(default_table)
-                else:
-                    _backfill_att_wl(named["db_per_km"], default_table)
 
     def merge_splitter_inventory(
         self, splitters, inventory_by_id, catalog_by_id, *, auto_fill_ratio=True
     ):
-        by_cat = self._data.setdefault("splitters", {}).setdefault("by_catalog_id", {})
-        by_name = self._data.setdefault("splitters", {}).setdefault("by_catalog_name", {})
-        by_topo = self._data.setdefault("splitters", {}).setdefault("by_topology", {})
+        items = self._splitter_items()
+        by_cat = {str(e.get("catalog_id")): e for e in items if e.get("catalog_id") and not e.get("id")}
+        by_topo = {str(e.get("id")): e for e in items if e.get("id")}
         by_ratio = self._data.get("splitters", {}).get("by_ratio", {})
+
         for sp in splitters:
             sid = getattr(sp, "id", None)
             inv_id = getattr(sp, "inventory_id", None)
@@ -53,31 +56,39 @@ class CatalogMergeMixin:
                 cat_name = str(getattr(catalog_by_id[catalog_id], "name", ""))
             ratio = guess_ratio_key(cat_name) if cat_name else None
             ports = _ports_from_ratio(by_ratio, ratio) if auto_fill_ratio else {}
+
             if catalog_id is not None:
-                entry = by_cat.setdefault(str(catalog_id), {
-                    "name": cat_name, "topology": f"{pin}x{pout}",
-                    "ratio": ratio or "", "ports": {},
-                })
+                entry = by_cat.get(str(catalog_id))
+                if entry is None:
+                    entry = {
+                        "catalog_id": str(catalog_id),
+                        "name": cat_name,
+                        "topology": f"{pin}x{pout}",
+                        "ratio": ratio or "",
+                        "ports": {},
+                    }
+                    items.append(entry)
+                    by_cat[str(catalog_id)] = entry
                 if cat_name and not entry.get("name"):
                     entry["name"] = cat_name
                 if ratio and not entry.get("ratio"):
                     entry["ratio"] = ratio
                 if ports and not entry.get("ports"):
                     entry["ports"] = ports
-                if cat_name:
-                    nentry = by_name.setdefault(cat_name, {
-                        "catalog_id": str(catalog_id), "topology": f"{pin}x{pout}",
-                        "ratio": ratio or "", "ports": {},
-                    })
-                    if ports and not nentry.get("ports"):
-                        nentry["ports"] = ports
-                    if ratio and not nentry.get("ratio"):
-                        nentry["ratio"] = ratio
+
             if sid is not None:
-                tentry = by_topo.setdefault(str(sid), {
-                    "inventory_id": inv_id, "catalog_id": catalog_id,
-                    "name": cat_name or getattr(sp, "description", ""),
-                    "topology": f"{pin}x{pout}", "ratio": ratio or "", "ports": {},
-                })
+                tentry = by_topo.get(str(sid))
+                if tentry is None:
+                    tentry = {
+                        "id": str(sid),
+                        "inventory_id": inv_id,
+                        "catalog_id": str(catalog_id) if catalog_id is not None else None,
+                        "name": cat_name or getattr(sp, "description", ""),
+                        "topology": f"{pin}x{pout}",
+                        "ratio": ratio or "",
+                        "ports": {},
+                    }
+                    items.append(tentry)
+                    by_topo[str(sid)] = tentry
                 if ports and not tentry.get("ports"):
                     tentry["ports"] = copy.deepcopy(ports)
