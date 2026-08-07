@@ -30,9 +30,9 @@ class CatalogSplittersMixin:
                 out[key] = v
         return out
 
-    def set_splitter_by_catalog(self, catalog_id, *, ports, name="", ratio="", wavelength_nm=1550):
+    def set_splitter_by_catalog(self, catalog_id, *, ports, name="", ratio=""):
         node = self._data.setdefault("splitters", {}).setdefault("by_catalog_id", {})
-        entry = {"ports": self._normalize_ports(ports), "ratio": ratio, "wavelength_nm": wavelength_nm}
+        entry = {"ports": self._normalize_ports(ports), "ratio": ratio}
         if name:
             entry["name"] = name
             self._data.setdefault("splitters", {}).setdefault("by_catalog_name", {})[name] = {
@@ -40,21 +40,21 @@ class CatalogSplittersMixin:
             }
         node[str(catalog_id)] = entry
 
-    def set_splitter_by_name(self, name, *, ports, catalog_id=None, ratio="", wavelength_nm=1550):
-        entry = {"ports": self._normalize_ports(ports), "ratio": ratio, "wavelength_nm": wavelength_nm}
+    def set_splitter_by_name(self, name, *, ports, catalog_id=None, ratio=""):
+        entry = {"ports": self._normalize_ports(ports), "ratio": ratio}
         if catalog_id is not None:
             entry["catalog_id"] = str(catalog_id)
-            self.set_splitter_by_catalog(catalog_id, ports=ports, name=name, ratio=ratio, wavelength_nm=wavelength_nm)
+            self.set_splitter_by_catalog(catalog_id, ports=ports, name=name, ratio=ratio)
         self._data.setdefault("splitters", {}).setdefault("by_catalog_name", {})[name] = entry
 
-    def set_splitter_by_ratio(self, ratio_key, *, ports, wavelength_nm=1550):
+    def set_splitter_by_ratio(self, ratio_key, *, ports):
         self._data.setdefault("splitters", {}).setdefault("by_ratio", {})[ratio_key] = {
-            "ports": self._normalize_ports(ports), "wavelength_nm": wavelength_nm
+            "ports": self._normalize_ports(ports)
         }
 
-    def set_splitter_instance(self, splitter_id, *, ports, wavelength_nm=1550):
+    def set_splitter_instance(self, splitter_id, *, ports):
         self._data.setdefault("splitters", {}).setdefault("by_topology", {})[str(splitter_id)] = {
-            "ports": self._normalize_ports(ports), "wavelength_nm": wavelength_nm
+            "ports": self._normalize_ports(ports)
         }
 
     def force_splitter_port(self, splitter_id, port, db, *, port_name=None):
@@ -65,6 +65,7 @@ class CatalogSplittersMixin:
             entry.setdefault("by_name", {})[port_name] = val
 
     def _resolve_port_db(self, ports, *, port, port_name, wavelength_nm, use_max, context):
+        """Порт по номеру/имени; если нет — fallback на ключ 'all' (равномерный сплиттер)."""
         from .catalog_helpers import _pick_wl, _port_entry_attenuation
         if not ports:
             return None
@@ -78,6 +79,8 @@ class CatalogSplittersMixin:
                     break
             if entry is None and port_name in ports:
                 entry = ports[port_name]
+        if entry is None and "all" in ports:
+            entry = ports["all"]
         if entry is None:
             return None
         if isinstance(entry, (int, float)):

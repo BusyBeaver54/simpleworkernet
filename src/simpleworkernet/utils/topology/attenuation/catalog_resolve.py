@@ -18,6 +18,8 @@ class CatalogResolveMixin:
                     val = forced_node[str(port)]
                 elif port_name and isinstance(forced_node.get("by_name"), dict):
                     val = forced_node["by_name"].get(port_name)
+                elif "all" in forced_node:
+                    val = forced_node["all"]
                 if val is not None:
                     if isinstance(val, (int, float)):
                         return float(val), "force"
@@ -63,10 +65,9 @@ class CatalogResolveMixin:
             ratio = self._data.get("splitters", {}).get("by_ratio", {}).get(ratio_key)
             if ratio:
                 ports = ratio.get("ports") or {}
+                # legacy equal_db → ports.all
                 if not ports and ratio.get("equal_db"):
-                    n = int(ratio.get("port_count") or port_count_out or 0)
-                    eq = ratio["equal_db"]
-                    ports = {str(i): {"name": f"out{i}", "attenuation": eq} for i in range(1, max(n, 1) + 1)}
+                    ports = {"all": {"name": "equal", "attenuation": ratio["equal_db"]}}
                 db = self._resolve_port_db(
                     ports, port=port, port_name=port_name,
                     wavelength_nm=wavelength_nm, use_max=use_max,
