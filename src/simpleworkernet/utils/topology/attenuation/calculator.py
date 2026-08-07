@@ -53,12 +53,6 @@ class Attenuation(
         direction: Optional[str] = None,
         use_max: Optional[bool] = None,
     ) -> PathReport:
-        """Затухание между двумя объектами.
-
-        fiber↔fiber: FNGraph между сооружениями → CGraph по ОВ коридора.
-        side — сторона кабеля; без side — ближайшие стороны.
-        port — номер ОВ (нужен хотя бы у одного конца для fiber↔fiber).
-        """
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
@@ -140,9 +134,16 @@ class Attenuation(
 
     def shortest_path(self, source: int, target: int) -> List[int]:
         try:
-            path = self.g.get_shortest_paths(source, to=target, output="vpath")
-            if path and path[0]:
-                return list(path[0])
+            paths = self.g.get_shortest_paths(source, target)
+            if paths and paths[0]:
+                return list(paths[0])
+        except TypeError:
+            try:
+                paths = self.g.get_shortest_paths(source, to=target, output="vpath")
+                if paths and paths[0]:
+                    return list(paths[0])
+            except Exception:
+                pass
         except Exception:
             pass
         return []
