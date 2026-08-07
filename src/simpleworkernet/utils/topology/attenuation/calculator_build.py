@@ -78,13 +78,13 @@ class AttenuationBuildMixin:
             raise AttenuationError(
                 f"объект не найден в графе после построения: {obj1_type}:{obj1_id} "
                 f"(есть {obj2_type}:{obj2_id}, но связать не удалось — "
-                f"проверьте side/направление или постройте CGraph вручную)"
+                f"проверьте номер ОВ (port) / сторону или постройте CGraph вручную)"
             )
         if not has_obj(self.g, obj2_type, obj2_id):
             raise AttenuationError(
                 f"объект не найден в графе после построения: {obj2_type}:{obj2_id} "
                 f"(есть {obj1_type}:{obj1_id}, но связать не удалось — "
-                f"проверьте side/направление или постройте CGraph вручную)"
+                f"проверьте номер ОВ (port) / сторону или постройте CGraph вручную)"
             )
 
     def _build_cgraph_from(
@@ -110,6 +110,20 @@ class AttenuationBuildMixin:
             return None
         return cg
 
+    def _require_fiber_port(
+        self,
+        obj1_type, obj1_id, obj1_port,
+        obj2_type, obj2_id, obj2_port,
+    ) -> None:
+        from ..constants import TYPE_FIBER
+        if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
+            if obj1_port is None and obj2_port is None:
+                raise AttenuationError(
+                    "для расчёта между кабелями укажите номер ОВ (port) "
+                    f"хотя бы у одного конца "
+                    f"(fiber:{obj1_id} / fiber:{obj2_id})"
+                )
+
     def _pick_endpoint_pair(
         self,
         obj1_type, obj1_id, obj2_type, obj2_id,
@@ -117,14 +131,20 @@ class AttenuationBuildMixin:
         obj1_side=None, obj1_port=None,
         obj2_side=None, obj2_port=None,
     ):
-        def candidates(otype, oid, side, port) -> List[int]:
-            strict = self.find_vertices(otype, oid, side=side, port=port)
-            if strict:
-                return strict
+        """Пара вершин с путём.
+
+        side — сторона кабеля (1|2), не направление сигнала.
+        Если side не задан — пара ближайших сторон (кратчайший путь).
+        port для fiber — номер ОВ.
+        """
+        def candidates(otype, oid, side, port):
+            hits = self.find_vertices(otype, oid, side=side, port=port)
+            if hits:
+                return hits
             if port is not None:
-                loose = self.find_vertices(otype, oid, side=side)
-                if loose:
-                    return loose
+                hits = self.find_vertices(otype, oid, side=side)
+                if hits:
+                    return hits
             return self.find_vertices(otype, oid)
 
         c1 = candidates(obj1_type, obj1_id, obj1_side, obj1_port)
@@ -133,11 +153,13 @@ class AttenuationBuildMixin:
             raise AttenuationError(
                 f"объект не найден в графе: {obj1_type}:{obj1_id}"
                 + (f" side={obj1_side}" if obj1_side is not None else "")
+                + (f" port={obj1_port}" if obj1_port is not None else "")
             )
         if not c2:
             raise AttenuationError(
                 f"объект не найден в графе: {obj2_type}:{obj2_id}"
                 + (f" side={obj2_side}" if obj2_side is not None else "")
+                + (f" port={obj2_port}" if obj2_port is not None else "")
             )
 
         best = None
@@ -146,17 +168,26 @@ class AttenuationBuildMixin:
                 if a == b:
                     return a, b
                 path = self.shortest_path(a, b)
-                if path and len(path) >= 2:
-                    score = len(path)
-                    if obj1_side is not None and int(self.g.vs[a]["side"]) == int(obj1_side):
-                        score -= 0.1
-                    if obj2_side is not None and int(self.g.vs[b]["side"]) == int(obj2_side):
-                        score -= 0.1
-                    if best is None or score < best[0]:
-                        best = (score, a, b)
+                if not path or len(path) < 2:
+                    continue
+                score = len(path)
+                if obj1_side is not None:
+                    try:
+                        if int(self.g.vs[a]["side"]) == int(obj1_side):
+                            score -= 0.01
+                    except Exception:
+                        pass
+                if obj2_side is not None:
+                    try:
+                        if int(self.g.vs[b]["side"]) == int(obj2_side):
+                            score -= 0.01
+                    except Exception:
+                        pass
+                if best is None or score < best[0]:
+                    best = (score, a, b)
         if best is not None:
             return best[1], best[2]
         raise AttenuationError(
             f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id} "
-            f"(вершины есть, пути нет — разные компоненты или неверная side)"
+            f"(вершины есть, пути нет — разные компоненты или неверный номер ОВ)"
         )

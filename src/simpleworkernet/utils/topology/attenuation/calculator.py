@@ -51,12 +51,22 @@ class Attenuation(
         direction: Optional[str] = None,
         use_max: Optional[bool] = None,
     ) -> PathReport:
+        """Затухание между двумя объектами.
+
+        side — сторона кабеля (1|2), не направление сигнала.
+        Без side — ближайшие стороны (кратчайший путь).
+        port для fiber — номер ОВ; для fiber↔fiber нужен хотя бы у одного конца.
+        """
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
         if use_max is not None:
             self.use_max = bool(use_max)
         try:
+            self._require_fiber_port(
+                obj1_type, obj1_id, obj1_port,
+                obj2_type, obj2_id, obj2_port,
+            )
             self._ensure_cgraph(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
