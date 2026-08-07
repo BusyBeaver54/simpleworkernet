@@ -1,15 +1,17 @@
 # simpleworkernet/utils/topology/attenuation/template.py
-"""Генерация/обновление attenuation.json в config_dir — отдельный файл на клиента.
+"""Генерация/обновление attenuation.json — общая папка для всех приложений.
 
-    generate_template(client, splitter_catalog_names=("PLC", "FBT"))
-    # → ~/.config/simpleworkernet/<app>/attenuation_<host>.json
+    ~/.config/simpleworkernet/attenuation_<host>.json
 
-    update_template(client, splitter_catalog_names=("PLC", "FBT"))
+    generate_template(client, ("PLC", "FBT"))
+    update_template(client, ("PLC", "FBT"))
     load_attenuation_catalog(client)
 """
 from __future__ import annotations
 import copy
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 from urllib.parse import urlparse
@@ -19,12 +21,22 @@ from .template_fetch import (
     fetch_cables, section_ids_by_names, fetch_catalog_items, fetch_topology_splitters,
 )
 
+def _shared_config_dir() -> Path:
+    """Общий каталог simpleworkernet (без имени приложения)."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path.home() / ".config"
+    return base / "simpleworkernet"
+
 def _safe_key(key: str) -> str:
     s = re.sub(r"[^\w.\-]+", "_", str(key).strip(), flags=re.UNICODE)
     return s.strip("._") or "default"
 
 def client_file_key(client: Any = None, client_key: Optional[str] = None) -> str:
-    """Ключ файла: явный client_key → host клиента → default."""
+    """Ключ файла: явный client_key → host из WorkerNetClient → default."""
     if client_key:
         return _safe_key(client_key)
     if client is None:
@@ -43,16 +55,11 @@ def attenuation_json_path(
     path: Optional[Union[str, Path]] = None,
     client_key: Optional[str] = None,
 ) -> Path:
-    """Путь: config_dir/attenuation_<host>.json (или явный path)."""
+    """Путь: <shared>/attenuation_<host>.json (или явный path/client_key)."""
     if path is not None:
         return Path(path)
     key = client_file_key(client, client_key)
-    name = f"attenuation_{key}.json"
-    try:
-        from ....core.config import config_manager
-        return config_manager.config_dir / name
-    except Exception:
-        return Path.cwd() / name
+    return _shared_config_dir() / f"attenuation_{key}.json"
 
 def load_attenuation_catalog(
     client: Any = None,
