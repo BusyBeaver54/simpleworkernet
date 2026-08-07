@@ -10,7 +10,7 @@
     print(report.total_db, report.to_table())
 """
 
-from .catalog import AttenuationCatalog
+from .catalog import AttenuationCatalog, guess_ratio_key
 from .models import AttenuationSegment, PathReport
 from .calculator import Attenuation
 
@@ -19,4 +19,5 @@ __all__ = [
     "AttenuationCatalog",
     "AttenuationSegment",
     "PathReport",
+    "guess_ratio_key",
 ]
