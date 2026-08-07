@@ -21,8 +21,8 @@
 - Windows: `%APPDATA%\simpleworkernet\`
 - macOS: `~/Library/Application Support/simpleworkernet/`
 
-`<host>` — hostname из URL `WorkerNetClient` (например `kz.example.com`).
-Можно задать своё имя: `client_key="kz"` → `attenuation_kz.json`.
+`<host>` — hostname из URL `WorkerNetClient` (например `my.workernet.ru`).
+Можно задать своё имя: `client_key="test"` → `attenuation_test.json`.
 
 ---
 
