@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator_build.py
 """CGraph ensure/build for Attenuation."""
 from __future__ import annotations
-from typing import Any, Optional, Union
+from typing import Any, List, Optional, Union
 from .errors import AttenuationError
 
 class AttenuationBuildMixin:
@@ -17,38 +17,74 @@ class AttenuationBuildMixin:
         obj2_side=None,
         obj2_port=None,
     ) -> None:
-        need_build = self.g is None
-        if not need_build:
-            h1 = self.find_vertices(obj1_type, obj1_id)
-            h2 = self.find_vertices(obj2_type, obj2_id)
-            if not h1 or not h2:
-                need_build = True
+        def has_obj(g, otype, oid) -> bool:
+            if g is None:
+                return False
+            for v in g.vs:
+                if v["obj_type"] == otype and str(v["obj_id"]) == str(oid):
+                    return True
+            return False
+
+        need_build = self.g is None or not (
+            has_obj(self.g, obj1_type, obj1_id) and has_obj(self.g, obj2_type, obj2_id)
+        )
         if not need_build:
             return
         if self.client is None:
             raise AttenuationError(
                 "CGraph не задан и нет client — невозможно построить граф"
             )
-        built = self._build_cgraph_from(
+
+        g1 = self._build_cgraph_from(
             obj1_type, obj1_id, side=obj1_side, port=obj1_port
         )
-        if built is not None:
-            self.g = built
-            if self.find_vertices(obj2_type, obj2_id):
-                return
-        built2 = self._build_cgraph_from(
+        if g1 is not None and has_obj(g1, obj1_type, obj1_id) and has_obj(g1, obj2_type, obj2_id):
+            self.g = g1
+            return
+
+        g2 = self._build_cgraph_from(
             obj2_type, obj2_id, side=obj2_side, port=obj2_port
         )
-        if built2 is not None:
-            self.g = built2
-            if self.find_vertices(obj1_type, obj1_id) and self.find_vertices(
-                obj2_type, obj2_id
+        if g2 is not None and has_obj(g2, obj1_type, obj1_id) and has_obj(g2, obj2_type, obj2_id):
+            self.g = g2
+            return
+
+        candidates = [g for g in (g1, g2) if g is not None]
+        if len(candidates) == 2:
+            try:
+                from ..merge import merge_cgraphs
+                merged = merge_cgraphs(candidates, self.client, self.cache)
+                if merged is not None and has_obj(merged, obj1_type, obj1_id) and has_obj(
+                    merged, obj2_type, obj2_id
+                ):
+                    self.g = merged
+                    return
+            except Exception:
+                pass
+
+        for g in (g1, g2, self.g):
+            if g is not None and (
+                has_obj(g, obj1_type, obj1_id) or has_obj(g, obj2_type, obj2_id)
             ):
-                return
+                self.g = g
+                break
+
         if self.g is None:
             raise AttenuationError(
                 f"не удалось построить CGraph для "
                 f"{obj1_type}:{obj1_id} / {obj2_type}:{obj2_id}"
+            )
+        if not has_obj(self.g, obj1_type, obj1_id):
+            raise AttenuationError(
+                f"объект не найден в графе после построения: {obj1_type}:{obj1_id} "
+                f"(есть {obj2_type}:{obj2_id}, но связать не удалось — "
+                f"проверьте side/направление или постройте CGraph вручную)"
+            )
+        if not has_obj(self.g, obj2_type, obj2_id):
+            raise AttenuationError(
+                f"объект не найден в графе после построения: {obj2_type}:{obj2_id} "
+                f"(есть {obj1_type}:{obj1_id}, но связать не удалось — "
+                f"проверьте side/направление или постройте CGraph вручную)"
             )
 
     def _build_cgraph_from(
@@ -73,3 +109,54 @@ class AttenuationBuildMixin:
         if cg.vcount() == 0:
             return None
         return cg
+
+    def _pick_endpoint_pair(
+        self,
+        obj1_type, obj1_id, obj2_type, obj2_id,
+        *,
+        obj1_side=None, obj1_port=None,
+        obj2_side=None, obj2_port=None,
+    ):
+        def candidates(otype, oid, side, port) -> List[int]:
+            strict = self.find_vertices(otype, oid, side=side, port=port)
+            if strict:
+                return strict
+            if port is not None:
+                loose = self.find_vertices(otype, oid, side=side)
+                if loose:
+                    return loose
+            return self.find_vertices(otype, oid)
+
+        c1 = candidates(obj1_type, obj1_id, obj1_side, obj1_port)
+        c2 = candidates(obj2_type, obj2_id, obj2_side, obj2_port)
+        if not c1:
+            raise AttenuationError(
+                f"объект не найден в графе: {obj1_type}:{obj1_id}"
+                + (f" side={obj1_side}" if obj1_side is not None else "")
+            )
+        if not c2:
+            raise AttenuationError(
+                f"объект не найден в графе: {obj2_type}:{obj2_id}"
+                + (f" side={obj2_side}" if obj2_side is not None else "")
+            )
+
+        best = None
+        for a in c1:
+            for b in c2:
+                if a == b:
+                    return a, b
+                path = self.shortest_path(a, b)
+                if path and len(path) >= 2:
+                    score = len(path)
+                    if obj1_side is not None and int(self.g.vs[a]["side"]) == int(obj1_side):
+                        score -= 0.1
+                    if obj2_side is not None and int(self.g.vs[b]["side"]) == int(obj2_side):
+                        score -= 0.1
+                    if best is None or score < best[0]:
+                        best = (score, a, b)
+        if best is not None:
+            return best[1], best[2]
+        raise AttenuationError(
+            f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id} "
+            f"(вершины есть, пути нет — разные компоненты или неверная side)"
+        )
