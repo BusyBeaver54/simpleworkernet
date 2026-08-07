@@ -3,15 +3,14 @@
 Расчёт оптических затуханий по CGraph (по запросу).
 
     cat = generate_template(client, ("PLC", "FBT"))
-    # → config_dir/attenuation_<host>.json
-    cat = update_template(client, ("PLC", "FBT"))
     cat = load_attenuation_catalog(client)
-    att = Attenuation(cgraph, catalog=cat, wavelength=1550)
+    att = Attenuation(catalog=cat, client=client, cache=cache)
+    r = att.calculate("olt", 1, "customer", 100, wavelength=1490)
 """
 
 from .catalog import AttenuationCatalog, guess_ratio_key
 from .models import AttenuationSegment, PathReport
-from .calculator import Attenuation
+from .calculator import Attenuation, AttenuationError
 from .template import (
     attenuation_json_path,
     client_file_key,
@@ -22,6 +21,7 @@ from .template import (
 
 __all__ = [
     "Attenuation",
+    "AttenuationError",
     "AttenuationCatalog",
     "AttenuationSegment",
     "PathReport",
