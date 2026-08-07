@@ -14,14 +14,16 @@ def generate_template(
     *,
     cache: Any = None,
     path: Optional[Union[str, Path]] = None,
-    fill_defaults: bool = False,
+    fill_defaults: bool = True,
+    auto_fill_ratio: bool = True,
 ) -> AttenuationCatalog:
     """
     Собрать шаблон:
-      - catalog_cables_get → cables
-      - Splitter.get + inventory → splitters.by_catalog_id / by_topology
+      - catalog_cables_get → cables.by_id / by_name (с дефолтной таблицей α)
+      - Splitter + inventory → splitters.by_catalog_id / by_catalog_name / by_topology
 
-    Пользователь дозаполняет ports / db_per_km.
+    При auto_fill_ratio имена каталога сопоставляются с by_ratio и ports
+    копируются автоматически (можно править вручную).
     """
     cat = AttenuationCatalog.with_defaults()
 
@@ -65,8 +67,22 @@ def generate_template(
                 inv = None
             if inv is not None:
                 inventory_by_id[inv_id] = inv
+                cid = getattr(inv, "catalog_id", None)
+                if cid is not None:
+                    try:
+                        cat_res = client.Inventory.get_inventory_catalog(id=cid)
+                        item = cat_res[0] if cat_res and len(cat_res) > 0 else None
+                        if item is not None:
+                            catalog_by_id[cid] = item
+                    except Exception:
+                        pass
 
-    cat.merge_splitter_inventory(sp_list, inventory_by_id, catalog_by_id)
+    cat.merge_splitter_inventory(
+        sp_list,
+        inventory_by_id,
+        catalog_by_id,
+        auto_fill_ratio=auto_fill_ratio,
+    )
 
     if fill_defaults:
         cat.fill_missing_with_defaults()
