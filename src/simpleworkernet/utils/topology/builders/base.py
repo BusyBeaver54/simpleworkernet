@@ -136,41 +136,21 @@ class GraphBuilder:
             return result
 
         if object_type == TYPE_FIBER:
+            # Interface: side=clps_first (1|2), port=clps_mid (номер ОВ в кабеле)
             key = ObjKey(TYPE_FIBER, object_id)
             comms = g.load_commutations(key)
-            if port is not None:
-                for rec in comms:
-                    if getattr(rec, "clps_last", None) == "finish":
-                        continue
-                    iface_num = (
-                        getattr(rec, "interface", None)
-                        or getattr(rec, "iface", None)
-                        or getattr(rec, "number", None)
-                    )
-                    if iface_num is not None and int(iface_num) == port:
-                        s = (
-                            side
-                            if side is not None
-                            else (
-                                int(rec.clps_first)
-                                if rec.clps_first is not None
-                                else 1
-                            )
-                        )
-                        fiber_id = (
-                            int(rec.clps_mid) if rec.clps_mid is not None else 0
-                        )
-                        result.append(Interface(key, side=s, port=fiber_id))
-                        break
-            else:
-                for rec in comms:
-                    if getattr(rec, "clps_last", None) == "finish":
-                        continue
-                    s = int(rec.clps_first) if rec.clps_first is not None else 1
-                    if side is not None and int(s) != int(side):
-                        continue
-                    fiber_id = int(rec.clps_mid) if rec.clps_mid is not None else 0
-                    result.append(Interface(key, side=s, port=fiber_id))
+            for rec in comms:
+                if getattr(rec, "clps_last", None) == "finish":
+                    continue
+                s = int(rec.clps_first) if rec.clps_first is not None else 1
+                fiber_num = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                if side is not None and int(s) != int(side):
+                    continue
+                if port is not None and int(fiber_num) != int(port):
+                    continue
+                result.append(Interface(key, side=s, port=fiber_num))
+            if not result and side is not None and port is not None:
+                result.append(Interface(key, side=int(side), port=int(port)))
             return result
 
         key = ObjKey(object_type, object_id)
@@ -181,9 +161,6 @@ class GraphBuilder:
         return result
 
     def _mark_terminate_vertices(self, ctx: BuildContext) -> None:
-        """
-        Разметка конечных вершин (логика как в оригинале).
-        """
         g = ctx.graph
 
         def neighbor_key(record):
