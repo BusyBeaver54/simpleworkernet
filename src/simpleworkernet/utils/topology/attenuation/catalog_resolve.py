@@ -30,30 +30,36 @@ class CatalogResolveMixin:
                         picked = _pick_wl(val, wavelength_nm, context=f"force splitter:{splitter_id}")
                         if picked:
                             return (picked[1] if use_max else picked[0]), "force"
-            inst = self._data.get("splitters", {}).get("by_topology", {}).get(str(splitter_id))
-            if inst:
+            inst = self._find_splitter(splitter_id=splitter_id)
+            if inst and inst.get("ports"):
                 db = self._resolve_port_db(
-                    inst.get("ports", {}), port=port, port_name=port_name,
+                    inst["ports"], port=port, port_name=port_name,
                     wavelength_nm=wavelength_nm, use_max=use_max,
                     context=f"splitter instance:{splitter_id}",
                 )
                 if db is not None:
                     return db, "instance"
+                if ratio_key is None:
+                    ratio_key = inst.get("ratio") or guess_ratio_key(inst.get("name") or "")
+
         if catalog_id is not None:
-            cat = self._data.get("splitters", {}).get("by_catalog_id", {}).get(str(catalog_id))
-            if cat:
+            cat = self._find_splitter(catalog_id=catalog_id)
+            if cat and cat.get("ports"):
                 db = self._resolve_port_db(
-                    cat.get("ports", {}), port=port, port_name=port_name,
+                    cat["ports"], port=port, port_name=port_name,
                     wavelength_nm=wavelength_nm, use_max=use_max,
                     context=f"splitter catalog_id:{catalog_id}",
                 )
                 if db is not None:
                     return db, "catalog"
+                if ratio_key is None:
+                    ratio_key = cat.get("ratio") or guess_ratio_key(cat.get("name") or "")
+
         if catalog_name:
-            cat = self._data.get("splitters", {}).get("by_catalog_name", {}).get(catalog_name)
-            if cat:
+            cat = self._find_splitter(catalog_name=catalog_name)
+            if cat and cat.get("ports"):
                 db = self._resolve_port_db(
-                    cat.get("ports", {}), port=port, port_name=port_name,
+                    cat["ports"], port=port, port_name=port_name,
                     wavelength_nm=wavelength_nm, use_max=use_max,
                     context=f"splitter name:{catalog_name!r}",
                 )
@@ -61,11 +67,11 @@ class CatalogResolveMixin:
                     return db, "catalog_name"
             if ratio_key is None:
                 ratio_key = guess_ratio_key(catalog_name)
+
         if ratio_key:
             ratio = self._data.get("splitters", {}).get("by_ratio", {}).get(ratio_key)
             if ratio:
                 ports = ratio.get("ports") or {}
-                # legacy equal_db → ports.all
                 if not ports and ratio.get("equal_db"):
                     ports = {"all": {"name": "equal", "attenuation": ratio["equal_db"]}}
                 db = self._resolve_port_db(
@@ -75,6 +81,7 @@ class CatalogResolveMixin:
                 )
                 if db is not None:
                     return db, "ratio"
+
         n = max(int(port_count_out or 0), 1)
         ideal = 10.0 * math.log10(n) if n > 1 else 0.0
         return ideal + self.splitter_excess_db(), "estimated"

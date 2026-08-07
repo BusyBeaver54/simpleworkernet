@@ -3,7 +3,6 @@
 from __future__ import annotations
 import copy, json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
 from .catalog_helpers import _DEFAULTS_PATH, _as_db_pair, _pick_wl
 
 class CatalogCoreMixin:
@@ -11,6 +10,54 @@ class CatalogCoreMixin:
         if data is None:
             data = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
         self._data = data
+        self._normalize_structure()
+
+    def _normalize_structure(self):
+        """Миграция старых by_id/by_name → списки."""
+        cables = self._data.get("cables")
+        if isinstance(cables, dict) and ("by_id" in cables or "by_name" in cables):
+            items, seen = [], set()
+            for cid, entry in (cables.get("by_id") or {}).items():
+                e = dict(entry)
+                e["id"] = str(cid)
+                items.append(e)
+                seen.add(str(cid))
+            for name, entry in (cables.get("by_name") or {}).items():
+                cid = str(entry.get("cabletype_id") or entry.get("id") or "")
+                if cid and cid in seen:
+                    continue
+                e = dict(entry)
+                e.setdefault("name", name)
+                if cid:
+                    e["id"] = cid
+                items.append(e)
+            self._data["cables"] = items
+        elif not isinstance(self._data.get("cables"), list):
+            self._data["cables"] = []
+
+        sp = self._data.setdefault("splitters", {})
+        if "items" not in sp:
+            items, seen_c = [], set()
+            for cid, entry in (sp.pop("by_catalog_id", None) or {}).items():
+                e = dict(entry)
+                e["catalog_id"] = str(cid)
+                items.append(e)
+                seen_c.add(str(cid))
+            for name, entry in (sp.pop("by_catalog_name", None) or {}).items():
+                cid = str(entry.get("catalog_id") or "")
+                if cid and cid in seen_c:
+                    continue
+                e = dict(entry)
+                e.setdefault("name", name)
+                if cid:
+                    e["catalog_id"] = cid
+                items.append(e)
+            for sid, entry in (sp.pop("by_topology", None) or {}).items():
+                e = dict(entry)
+                e["id"] = str(sid)
+                items.append(e)
+            sp["items"] = items
+        sp.setdefault("by_ratio", {})
 
     @classmethod
     def with_defaults(cls):
@@ -28,12 +75,14 @@ class CatalogCoreMixin:
         return copy.deepcopy(self._data)
 
     def save(self, path):
-        Path(path).write_text(json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8")
+        Path(path).write_text(
+            json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
 
     def merge_from_json(self, path):
-        """Дополнить каталог из другого JSON (новые объекты / незаполненные поля)."""
         other = json.loads(Path(path).read_text(encoding="utf-8"))
         self._deep_merge(self._data, other)
+        self._normalize_structure()
 
     @staticmethod
     def _deep_merge(dst, src):
@@ -42,10 +91,6 @@ class CatalogCoreMixin:
                 CatalogCoreMixin._deep_merge(dst[k], v)
             elif k not in dst or dst[k] in (None, {}, []):
                 dst[k] = copy.deepcopy(v)
-            elif isinstance(v, dict) and isinstance(dst[k], dict):
-                for sk, sv in v.items():
-                    if sk not in dst[k] or not dst[k][sk]:
-                        dst[k][sk] = copy.deepcopy(sv)
 
     @property
     def defaults(self):
@@ -80,21 +125,32 @@ class CatalogCoreMixin:
     def splitter_excess_db(self):
         return float(self.defaults.get("splitter_excess_db", 0.5))
 
-    def _cables_root(self):
-        cables = self._data.setdefault("cables", {})
-        if "by_id" not in cables and "by_name" not in cables:
-            migrated = {k: v for k, v in cables.items() if k not in ("by_id", "by_name")}
-            self._data["cables"] = {"by_id": migrated, "by_name": {}}
-            return self._data["cables"]
-        cables.setdefault("by_id", {})
-        cables.setdefault("by_name", {})
-        return cables
+    def _cables(self) -> list:
+        if not isinstance(self._data.get("cables"), list):
+            self._normalize_structure()
+        return self._data["cables"]
+
+    def _find_cable(self, *, cabletype_id=None, name=None):
+        for entry in self._cables():
+            if cabletype_id is not None and str(entry.get("id")) == str(cabletype_id):
+                return entry
+            if name and str(entry.get("name") or "") == str(name):
+                return entry
+        return None
 
     def set_cable(self, cabletype_id=None, *, name="", db_per_km=None):
-        root = self._cables_root()
-        entry = {}
+        entry = self._find_cable(cabletype_id=cabletype_id, name=name if not cabletype_id else None)
+        if entry is None:
+            entry = {}
+            if cabletype_id is not None:
+                entry["id"] = str(cabletype_id)
+            if name:
+                entry["name"] = name
+            self._cables().append(entry)
         if name:
             entry["name"] = name
+        if cabletype_id is not None:
+            entry["id"] = str(cabletype_id)
         if db_per_km is not None:
             norm = {}
             for k, v in db_per_km.items():
@@ -102,23 +158,14 @@ class CatalogCoreMixin:
                 if pair:
                     norm[str(k)] = {"db": pair[0], "db_max": pair[1]}
             entry["db_per_km"] = norm
-        if cabletype_id is not None:
-            node = root["by_id"].setdefault(str(cabletype_id), {})
-            node.update(entry)
-            if name:
-                root["by_name"].setdefault(name, {}).update({"cabletype_id": str(cabletype_id), **entry})
-        elif name:
-            root["by_name"].setdefault(name, {}).update(entry)
 
     def cable_db_per_km(self, cabletype_id=None, wavelength_nm=1550, *, name=None, use_max=False):
-        root = self._cables_root()
-        entry = None
-        if cabletype_id is not None:
-            entry = root.get("by_id", {}).get(str(cabletype_id))
-        if entry is None and name:
-            entry = root.get("by_name", {}).get(name)
+        entry = self._find_cable(cabletype_id=cabletype_id, name=name)
         if entry and entry.get("db_per_km"):
-            picked = _pick_wl(entry["db_per_km"], wavelength_nm, context=f"cable id={cabletype_id} name={name!r}")
+            picked = _pick_wl(
+                entry["db_per_km"], wavelength_nm,
+                context=f"cable id={cabletype_id} name={name!r}",
+            )
             if picked is not None:
                 return picked[1] if use_max else picked[0]
         return self.fiber_db_per_km(wavelength_nm, use_max=use_max)
