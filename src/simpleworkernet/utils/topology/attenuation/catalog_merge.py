@@ -1,13 +1,13 @@
 # simpleworkernet/utils/topology/attenuation/catalog_merge.py
-"""Merge cables/splitters from live API into user JSON (non-destructive)."""
+"""Merge cables/splitters from live API (non-destructive)."""
 from __future__ import annotations
 import copy
-from .catalog_helpers import guess_ratio_key
-from .catalog_fill import _ports_from_ratio, _backfill_att_wl
+from .catalog_helpers import guess_ratio_key, ports_from_ratio_key
+from .catalog_fill import _backfill_att_wl
 
 class CatalogMergeMixin:
     def merge_cable_catalog(self, items):
-        """items — Fiber.Catalog_cables_get. name = model (марка), без brand."""
+        """name = model (марка), без brand."""
         default_table = self.defaults.get("fiber_db_per_km", {})
         cables = self._cables()
         by_id = {str(e.get("id")): e for e in cables if e.get("id") is not None}
@@ -15,7 +15,6 @@ class CatalogMergeMixin:
             cid = getattr(it, "id", None)
             if cid is None:
                 continue
-            # только марка кабеля (model), без производителя
             name = (
                 str(getattr(it, "model", "") or "").strip()
                 or str(getattr(it, "name", "") or "").strip()
@@ -42,7 +41,6 @@ class CatalogMergeMixin:
         items = self._splitter_items()
         by_cat = {str(e.get("catalog_id")): e for e in items if e.get("catalog_id") and not e.get("id")}
         by_topo = {str(e.get("id")): e for e in items if e.get("id")}
-        by_ratio = self._data.get("splitters", {}).get("by_ratio", {})
 
         for sp in splitters:
             sid = getattr(sp, "id", None)
@@ -55,17 +53,14 @@ class CatalogMergeMixin:
             if catalog_id is not None and catalog_id in catalog_by_id:
                 cat_name = str(getattr(catalog_by_id[catalog_id], "name", ""))
             ratio = guess_ratio_key(cat_name) if cat_name else None
-            ports = _ports_from_ratio(by_ratio, ratio) if auto_fill_ratio else {}
+            ports = ports_from_ratio_key(ratio) if auto_fill_ratio and ratio else {}
 
             if catalog_id is not None:
                 entry = by_cat.get(str(catalog_id))
                 if entry is None:
                     entry = {
-                        "catalog_id": str(catalog_id),
-                        "name": cat_name,
-                        "topology": f"{pin}x{pout}",
-                        "ratio": ratio or "",
-                        "ports": {},
+                        "catalog_id": str(catalog_id), "name": cat_name,
+                        "topology": f"{pin}x{pout}", "ratio": ratio or "", "ports": {},
                     }
                     items.append(entry)
                     by_cat[str(catalog_id)] = entry
@@ -80,13 +75,10 @@ class CatalogMergeMixin:
                 tentry = by_topo.get(str(sid))
                 if tentry is None:
                     tentry = {
-                        "id": str(sid),
-                        "inventory_id": inv_id,
+                        "id": str(sid), "inventory_id": inv_id,
                         "catalog_id": str(catalog_id) if catalog_id is not None else None,
                         "name": cat_name or getattr(sp, "description", ""),
-                        "topology": f"{pin}x{pout}",
-                        "ratio": ratio or "",
-                        "ports": {},
+                        "topology": f"{pin}x{pout}", "ratio": ratio or "", "ports": {},
                     }
                     items.append(tentry)
                     by_topo[str(sid)] = tentry

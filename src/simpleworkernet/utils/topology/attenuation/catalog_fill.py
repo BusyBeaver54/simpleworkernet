@@ -1,8 +1,9 @@
 # simpleworkernet/utils/topology/attenuation/catalog_fill.py
-"""Backfill missing wavelengths / ratio defaults into user catalog."""
+"""Backfill missing wavelengths from package ratio_defaults."""
 from __future__ import annotations
-import copy, json
-from .catalog_helpers import _DEFAULTS_PATH, guess_ratio_key
+import copy
+from .catalog_helpers import guess_ratio_key, load_ratio_defaults, ports_from_ratio_key, _DEFAULTS_PATH
+import json
 
 def _backfill_att_wl(dst_att, src_att) -> int:
     if not isinstance(dst_att, dict) or not isinstance(src_att, dict):
@@ -14,57 +15,26 @@ def _backfill_att_wl(dst_att, src_att) -> int:
             n += 1
     return n
 
-def _ports_from_ratio(by_ratio, ratio):
-    if not ratio or ratio not in by_ratio:
-        return {}
-    r = by_ratio[ratio]
-    if r.get("ports"):
-        return copy.deepcopy(r["ports"])
-    if r.get("equal_db"):
-        return {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
-    return {}
-
 class CatalogFillMixin:
-    def sync_ratio_defaults(self) -> int:
-        pkg = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
-        src_ratio = (pkg.get("splitters") or {}).get("by_ratio") or {}
-        dst_ratio = self._data.setdefault("splitters", {}).setdefault("by_ratio", {})
-        added = 0
-        for key, src in src_ratio.items():
-            if key not in dst_ratio:
-                dst_ratio[key] = copy.deepcopy(src)
-                added += 1
-                continue
-            dst_ports = dst_ratio[key].setdefault("ports", {})
-            for pk, pv in (src.get("ports") or {}).items():
-                if pk not in dst_ports:
-                    dst_ports[pk] = copy.deepcopy(pv)
-                    added += 1
-                    continue
-                if isinstance(pv, dict) and isinstance(dst_ports[pk], dict):
-                    added += _backfill_att_wl(
-                        dst_ports[pk].setdefault("attenuation", {}),
-                        pv.get("attenuation") or {},
-                    )
-        src_fiber = (pkg.get("defaults") or {}).get("fiber_db_per_km") or {}
-        added += _backfill_att_wl(self.defaults.setdefault("fiber_db_per_km", {}), src_fiber)
-        return added
-
     def fill_missing_wavelengths(self) -> int:
         added = 0
-        by_ratio = self._data.get("splitters", {}).get("by_ratio", {})
         default_fiber = self.defaults.get("fiber_db_per_km", {})
+        pkg = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
+        src_fiber = (pkg.get("defaults") or {}).get("fiber_db_per_km") or {}
+        _backfill_att_wl(self.defaults.setdefault("fiber_db_per_km", {}), src_fiber)
+
         for entry in self._cables():
             if entry.get("db_per_km"):
-                added += _backfill_att_wl(entry["db_per_km"], default_fiber)
+                added += _backfill_att_wl(entry["db_per_km"], default_fiber or src_fiber)
             else:
-                entry["db_per_km"] = copy.deepcopy(default_fiber)
-                added += len(default_fiber)
+                entry["db_per_km"] = copy.deepcopy(default_fiber or src_fiber)
+                added += len(entry["db_per_km"])
+
         for entry in self._splitter_items():
             ratio = entry.get("ratio") or ""
             if not ratio and entry.get("name"):
                 ratio = guess_ratio_key(entry["name"]) or ""
-            src_ports = _ports_from_ratio(by_ratio, ratio) if ratio else {}
+            src_ports = ports_from_ratio_key(ratio) if ratio else {}
             ports = entry.setdefault("ports", {})
             if not ports and src_ports:
                 entry["ports"] = copy.deepcopy(src_ports)
@@ -84,8 +54,11 @@ class CatalogFillMixin:
         return added
 
     def fill_missing_with_defaults(self):
-        self.sync_ratio_defaults()
         default_table = self.defaults.get("fiber_db_per_km", {})
+        if not default_table:
+            pkg = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
+            default_table = (pkg.get("defaults") or {}).get("fiber_db_per_km") or {}
+            self.defaults["fiber_db_per_km"] = copy.deepcopy(default_table)
         for entry in self._cables():
             if not entry.get("db_per_km"):
                 entry["db_per_km"] = copy.deepcopy(default_table)
