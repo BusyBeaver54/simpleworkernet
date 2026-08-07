@@ -67,6 +67,33 @@ def _port_name(entry: Any, fallback: str = "") -> str:
         return str(entry["name"])
     return fallback
 
+_RATIO_DEFAULTS_CACHE = None
+
+def load_ratio_defaults() -> dict:
+    """Шаблоны ratio из package defaults.json (не в user JSON)."""
+    global _RATIO_DEFAULTS_CACHE
+    if _RATIO_DEFAULTS_CACHE is not None:
+        return _RATIO_DEFAULTS_CACHE
+    import json
+    data = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    sp = data.get("splitters") or {}
+    _RATIO_DEFAULTS_CACHE = (
+        sp.get("ratio_defaults") or sp.get("by_ratio") or {}
+    )
+    return _RATIO_DEFAULTS_CACHE
+
+def ports_from_ratio_key(ratio: str) -> dict:
+    """ports из package ratio_defaults."""
+    import copy
+    if not ratio:
+        return {}
+    r = load_ratio_defaults().get(ratio) or {}
+    if r.get("ports"):
+        return copy.deepcopy(r["ports"])
+    if r.get("equal_db"):
+        return {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
+    return {}
+
 _RATIO_PATTERNS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"(?:^|[^\d])5\s*[/x:]\s*95(?:[^\d]|$)", re.I), "1x2_5/95"),
     (re.compile(r"(?:^|[^\d])95\s*[/x:]\s*5(?:[^\d]|$)", re.I), "1x2_5/95"),
