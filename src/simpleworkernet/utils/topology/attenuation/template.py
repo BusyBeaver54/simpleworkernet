@@ -1,33 +1,66 @@
 # simpleworkernet/utils/topology/attenuation/template.py
-"""Генерация/обновление attenuation.json в config_dir.
+"""Генерация/обновление attenuation.json в config_dir — отдельный файл на клиента.
 
-    generate_template(client, catalog_names=("PLC", "FBT"), cache=cache)
+    generate_template(client, catalog_names=("PLC", "FBT"))
+    # → ~/.config/simpleworkernet/<app>/attenuation_<host>.json
+
     update_template(client, catalog_names=("PLC", "FBT"))
-    load_attenuation_catalog()
+    load_attenuation_catalog(client)
 """
 from __future__ import annotations
 import copy
+import re
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
+from urllib.parse import urlparse
 from .catalog import AttenuationCatalog
 from .catalog_helpers import guess_ratio_key
 from .template_fetch import (
     fetch_cables, section_ids_by_names, fetch_catalog_items, fetch_topology_splitters,
 )
 
-_DEFAULT_FILENAME = "attenuation.json"
+def _safe_key(key: str) -> str:
+    s = re.sub(r"[^\w.\-]+", "_", str(key).strip(), flags=re.UNICODE)
+    return s.strip("._") or "default"
 
-def attenuation_json_path(path: Optional[Union[str, Path]] = None) -> Path:
+def client_file_key(client: Any = None, client_key: Optional[str] = None) -> str:
+    """Ключ файла: явный client_key → host клиента → default."""
+    if client_key:
+        return _safe_key(client_key)
+    if client is None:
+        return "default"
+    host = getattr(client, "host", None) or getattr(client, "_host", None)
+    if not host and hasattr(client, "_url"):
+        try:
+            host = urlparse(str(client._url)).hostname
+        except Exception:
+            host = None
+    return _safe_key(host or "default")
+
+def attenuation_json_path(
+    client: Any = None,
+    *,
+    path: Optional[Union[str, Path]] = None,
+    client_key: Optional[str] = None,
+) -> Path:
+    """Путь: config_dir/attenuation_<host>.json (или явный path)."""
     if path is not None:
         return Path(path)
+    key = client_file_key(client, client_key)
+    name = f"attenuation_{key}.json"
     try:
         from ....core.config import config_manager
-        return config_manager.config_dir / _DEFAULT_FILENAME
+        return config_manager.config_dir / name
     except Exception:
-        return Path.cwd() / _DEFAULT_FILENAME
+        return Path.cwd() / name
 
-def load_attenuation_catalog(path: Optional[Union[str, Path]] = None) -> AttenuationCatalog:
-    p = attenuation_json_path(path)
+def load_attenuation_catalog(
+    client: Any = None,
+    *,
+    path: Optional[Union[str, Path]] = None,
+    client_key: Optional[str] = None,
+) -> AttenuationCatalog:
+    p = attenuation_json_path(client, path=path, client_key=client_key)
     if p.exists():
         return AttenuationCatalog.from_json(p)
     return AttenuationCatalog.with_defaults()
@@ -90,16 +123,18 @@ def _apply_db(cat, client, *, cache=None, catalog_names=None,
 
 def generate_template(
     client, *, catalog_names: Optional[Sequence[str]] = None, cache=None,
-    path=None, fill_defaults=True, auto_fill_ratio=True,
+    path=None, client_key: Optional[str] = None,
+    fill_defaults=True, auto_fill_ratio=True,
     include_topology_splitters=False, overwrite=False,
 ) -> AttenuationCatalog:
-    """Создать attenuation.json. catalog_names=(\"PLC\",\"FBT\") — секции каталога ТМЦ."""
-    p = attenuation_json_path(path)
+    """Создать attenuation_<host>.json. catalog_names=(\"PLC\",\"FBT\")."""
+    p = attenuation_json_path(client, path=path, client_key=client_key)
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists() and not overwrite:
         return update_template(
             client, catalog_names=catalog_names, cache=cache, path=p,
-            fill_defaults=fill_defaults, auto_fill_ratio=auto_fill_ratio,
+            client_key=client_key, fill_defaults=fill_defaults,
+            auto_fill_ratio=auto_fill_ratio,
             include_topology_splitters=include_topology_splitters,
         )
     cat = AttenuationCatalog.with_defaults()
@@ -111,11 +146,12 @@ def generate_template(
 
 def update_template(
     client, *, catalog_names: Optional[Sequence[str]] = None, cache=None,
-    path=None, fill_defaults=True, auto_fill_ratio=True,
+    path=None, client_key: Optional[str] = None,
+    fill_defaults=True, auto_fill_ratio=True,
     include_topology_splitters=False,
 ) -> AttenuationCatalog:
-    """Дописать новые кабели/сплиттеры из БД (не затирая ports/db_per_km)."""
-    p = attenuation_json_path(path)
+    """Дописать новые объекты из БД этого клиента (не затирая правки)."""
+    p = attenuation_json_path(client, path=path, client_key=client_key)
     p.parent.mkdir(parents=True, exist_ok=True)
     cat = AttenuationCatalog.from_json(p) if p.exists() else AttenuationCatalog.with_defaults()
     before = set(cat.unset_profiles())

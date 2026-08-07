@@ -1,15 +1,11 @@
 # simpleworkernet/utils/topology/attenuation/__init__.py
 """
-Расчёт оптических затуханий по CGraph (по запросу, не при build).
+Расчёт оптических затуханий по CGraph (по запросу).
 
-    from simpleworkernet.utils.topology.attenuation import (
-        Attenuation, AttenuationCatalog, load_attenuation_catalog,
-        generate_template, update_template,
-    )
-
-    cat = generate_template(client)          # → config_dir/attenuation.json
-    cat = update_template(client)            # дописать новые из БД
-    cat = load_attenuation_catalog()         # загрузить для расчёта
+    cat = generate_template(client, catalog_names=("PLC", "FBT"))
+    # → config_dir/attenuation_<host>.json
+    cat = update_template(client, catalog_names=("PLC", "FBT"))
+    cat = load_attenuation_catalog(client)
     att = Attenuation(cgraph, catalog=cat, wavelength=1550)
 """
 
@@ -18,6 +14,7 @@ from .models import AttenuationSegment, PathReport
 from .calculator import Attenuation
 from .template import (
     attenuation_json_path,
+    client_file_key,
     generate_template,
     load_attenuation_catalog,
     update_template,
@@ -30,6 +27,7 @@ __all__ = [
     "PathReport",
     "guess_ratio_key",
     "attenuation_json_path",
+    "client_file_key",
     "generate_template",
     "load_attenuation_catalog",
     "update_template",
