@@ -85,21 +85,23 @@ class GraphBuilder:
 
         while ctx.queue:
             current_iface, _parent = ctx.queue.popleft()
-            obj = current_iface.obj
-            comms = g.load_commutations(obj)
-            if not comms:
+            if current_iface in ctx.visited:
                 continue
-            try:
-                handler = get_handler(obj.obj_type)
-            except ValueError as e:
-                self.logger.warning(str(e))
-                continue
-            handler.process(obj, comms, current_iface, ctx)
+            ctx.visited.add(current_iface)
 
-        g._finish_data = ctx.finish_data
+            handler = get_handler(current_iface.obj.obj_type)
+            if handler is None:
+                self.logger.warning(
+                    f"Нет handler для {current_iface.obj.obj_type}"
+                )
+                continue
+            handler.expand(current_iface, ctx)
+
         self._mark_terminate_vertices(ctx)
         g.update_directed_flag()
-        self.logger.info("=== ПОСТРОЕНИЕ ЗАВЕРШЕНО ===")
+        self.logger.info(
+            f"CGraph: {g.vcount()} вершин, {g.ecount()} рёбер"
+        )
         return g
 
     def _resolve_start_interfaces(
@@ -167,6 +169,8 @@ class GraphBuilder:
                     if getattr(rec, "clps_last", None) == "finish":
                         continue
                     s = int(rec.clps_first) if rec.clps_first is not None else 1
+                    if side is not None and int(s) != int(side):
+                        continue
                     fiber_id = int(rec.clps_mid) if rec.clps_mid is not None else 0
                     result.append(Interface(key, side=s, port=fiber_id))
             return result
@@ -179,14 +183,6 @@ class GraphBuilder:
         return result
 
     def _mark_terminate_vertices(self, ctx: BuildContext) -> None:
-        """
-        Разметка конечных вершин (логика как в оригинале).
-
-        - OLT, switch, терминальные — всегда конечны
-        - кросс/кабель — конечны, если на противоположной стороне нет
-          коммутации или сосед терминальный
-        - сплиттер/CWDM — конечны, если нет внешних не-терминальных соседей
-        """
         g = ctx.graph
 
         def neighbor_key(record):
@@ -246,17 +242,19 @@ class GraphBuilder:
                 continue
 
             if obj_type in (TYPE_SPLITTER, TYPE_CWDM):
-                has_non_term = False
+                has_ext = False
                 for rec in comms:
+                    if getattr(rec, "clps_last", None) == "finish":
+                        continue
                     nk = neighbor_key(rec)
-                    if nk is not None and nk.obj_type not in TERMINAL_TYPES:
-                        has_non_term = True
+                    if nk is None:
+                        continue
+                    if nk.obj_type not in TERMINAL_TYPES:
+                        has_ext = True
                         break
-                v["terminate_vertex"] = not has_non_term
-                v["finish_data"] = (
-                    ctx.finish_data.get(obj_key, []) if not has_non_term else []
-                )
+                v["terminate_vertex"] = not has_ext
+                v["finish_data"] = ctx.finish_data.get(obj_key, [])
                 continue
 
-            v["terminate_vertex"] = True
-            v["finish_data"] = ctx.finish_data.get(obj_key, [])
+            v["terminate_vertex"] = False
+            v["finish_data"] = []
