@@ -36,17 +36,25 @@ def _safe_key(key: str) -> str:
     return s.strip("._") or "default"
 
 def client_file_key(client: Any = None, client_key: Optional[str] = None) -> str:
-    """Ключ файла: явный client_key → host из WorkerNetClient → default."""
+    """Ключ файла: явный client_key → host из WorkerNetClient._url → default.
+
+    Нельзя использовать getattr(client, "host") — у WorkerNetClient.__getattr__
+    перехватывает любые имена и возвращает DynamicCategory.
+    """
     if client_key:
         return _safe_key(client_key)
     if client is None:
         return "default"
-    host = getattr(client, "host", None) or getattr(client, "_host", None)
-    if not host and hasattr(client, "_url"):
-        try:
-            host = urlparse(str(client._url)).hostname
-        except Exception:
-            host = None
+    # только из __dict__, без __getattr__
+    d = getattr(client, "__dict__", {}) or {}
+    host = d.get("host") or d.get("_host")
+    if not host:
+        url = d.get("_url")
+        if url:
+            try:
+                host = urlparse(str(url)).hostname
+            except Exception:
+                host = None
     return _safe_key(host or "default")
 
 def attenuation_json_path(
