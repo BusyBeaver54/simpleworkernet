@@ -81,12 +81,9 @@ def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
             if r.get("ports"):
                 ports = copy.deepcopy(r["ports"])
             elif r.get("equal_db"):
-                n = int(r.get("port_count") or 0)
-                eq = r["equal_db"]
-                ports = {str(i): {"name": f"out{i}", "attenuation": copy.deepcopy(eq)}
-                         for i in range(1, max(n, 1) + 1)}
+                ports = {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
         entry = by_cat.setdefault(str(cid), {
-            "name": name, "ratio": ratio or "", "ports": {}, "wavelength_nm": 1550,
+            "name": name, "ratio": ratio or "", "ports": {},
         })
         if name and not entry.get("name"):
             entry["name"] = name
@@ -96,7 +93,7 @@ def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
             entry["ports"] = ports
         if name:
             nentry = by_name.setdefault(name, {
-                "catalog_id": str(cid), "ratio": ratio or "", "ports": {}, "wavelength_nm": 1550,
+                "catalog_id": str(cid), "ratio": ratio or "", "ports": {},
             })
             if ratio and not nentry.get("ratio"):
                 nentry["ratio"] = ratio
