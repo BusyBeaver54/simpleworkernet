@@ -85,23 +85,21 @@ class GraphBuilder:
 
         while ctx.queue:
             current_iface, _parent = ctx.queue.popleft()
-            if current_iface in ctx.visited:
+            obj = current_iface.obj
+            comms = g.load_commutations(obj)
+            if not comms:
                 continue
-            ctx.visited.add(current_iface)
-
-            handler = get_handler(current_iface.obj.obj_type)
-            if handler is None:
-                self.logger.warning(
-                    f"Нет handler для {current_iface.obj.obj_type}"
-                )
+            try:
+                handler = get_handler(obj.obj_type)
+            except ValueError as e:
+                self.logger.warning(str(e))
                 continue
-            handler.expand(current_iface, ctx)
+            handler.process(obj, comms, current_iface, ctx)
 
+        g._finish_data = ctx.finish_data
         self._mark_terminate_vertices(ctx)
         g.update_directed_flag()
-        self.logger.info(
-            f"CGraph: {g.vcount()} вершин, {g.ecount()} рёбер"
-        )
+        self.logger.info("=== ПОСТРОЕНИЕ ЗАВЕРШЕНО ===")
         return g
 
     def _resolve_start_interfaces(
@@ -183,6 +181,9 @@ class GraphBuilder:
         return result
 
     def _mark_terminate_vertices(self, ctx: BuildContext) -> None:
+        """
+        Разметка конечных вершин (логика как в оригинале).
+        """
         g = ctx.graph
 
         def neighbor_key(record):
@@ -242,19 +243,17 @@ class GraphBuilder:
                 continue
 
             if obj_type in (TYPE_SPLITTER, TYPE_CWDM):
-                has_ext = False
+                has_non_term = False
                 for rec in comms:
-                    if getattr(rec, "clps_last", None) == "finish":
-                        continue
                     nk = neighbor_key(rec)
-                    if nk is None:
-                        continue
-                    if nk.obj_type not in TERMINAL_TYPES:
-                        has_ext = True
+                    if nk is not None and nk.obj_type not in TERMINAL_TYPES:
+                        has_non_term = True
                         break
-                v["terminate_vertex"] = not has_ext
-                v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                v["terminate_vertex"] = not has_non_term
+                v["finish_data"] = (
+                    ctx.finish_data.get(obj_key, []) if not has_non_term else []
+                )
                 continue
 
-            v["terminate_vertex"] = False
-            v["finish_data"] = []
+            v["terminate_vertex"] = True
+            v["finish_data"] = ctx.finish_data.get(obj_key, [])
