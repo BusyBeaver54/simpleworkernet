@@ -57,7 +57,7 @@ class CatalogCoreMixin:
                 e["id"] = str(sid)
                 items.append(e)
             sp["items"] = items
-        sp.setdefault("by_ratio", {})
+        sp.pop("by_ratio", None)
 
     @classmethod
     def with_defaults(cls):
@@ -72,11 +72,15 @@ class CatalogCoreMixin:
         return cls(copy.deepcopy(data))
 
     def to_dict(self):
-        return copy.deepcopy(self._data)
+        data = copy.deepcopy(self._data)
+        if isinstance(data.get("splitters"), dict):
+            data["splitters"].pop("ratio_defaults", None)
+            data["splitters"].pop("by_ratio", None)
+        return data
 
     def save(self, path):
         Path(path).write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
     def merge_from_json(self, path):
