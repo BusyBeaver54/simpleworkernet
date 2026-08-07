@@ -45,7 +45,6 @@ def client_file_key(client: Any = None, client_key: Optional[str] = None) -> str
         return _safe_key(client_key)
     if client is None:
         return "default"
-    # только из __dict__, без __getattr__
     d = getattr(client, "__dict__", {}) or {}
     host = d.get("host") or d.get("_host")
     if not host:
@@ -81,8 +80,8 @@ def load_attenuation_catalog(
     return AttenuationCatalog.with_defaults()
 
 def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
-    by_cat = cat._data.setdefault("splitters", {}).setdefault("by_catalog_id", {})
-    by_name = cat._data.setdefault("splitters", {}).setdefault("by_catalog_name", {})
+    sp_items = cat._splitter_items()
+    by_cat = {str(e.get("catalog_id")): e for e in sp_items if e.get("catalog_id") and not e.get("id")}
     by_ratio = cat._data.get("splitters", {}).get("by_ratio", {})
     for it in items:
         cid = getattr(it, "id", None)
@@ -97,23 +96,17 @@ def _merge_catalog_items(cat, items, *, auto_fill_ratio=True):
                 ports = copy.deepcopy(r["ports"])
             elif r.get("equal_db"):
                 ports = {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
-        entry = by_cat.setdefault(str(cid), {
-            "name": name, "ratio": ratio or "", "ports": {},
-        })
+        entry = by_cat.get(str(cid))
+        if entry is None:
+            entry = {"catalog_id": str(cid), "name": name, "ratio": ratio or "", "ports": {}}
+            sp_items.append(entry)
+            by_cat[str(cid)] = entry
         if name and not entry.get("name"):
             entry["name"] = name
         if ratio and not entry.get("ratio"):
             entry["ratio"] = ratio
         if ports and not entry.get("ports"):
             entry["ports"] = ports
-        if name:
-            nentry = by_name.setdefault(name, {
-                "catalog_id": str(cid), "ratio": ratio or "", "ports": {},
-            })
-            if ratio and not nentry.get("ratio"):
-                nentry["ratio"] = ratio
-            if ports and not nentry.get("ports"):
-                nentry["ports"] = ports
 
 def _apply_db(cat, client, *, splitter_catalog_names, cache=None,
               include_topology_splitters=False, fill_defaults=True, auto_fill_ratio=True):
