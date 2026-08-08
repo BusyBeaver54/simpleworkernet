@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator_build.py
 """CGraph ensure/build for Attenuation."""
 from __future__ import annotations
-from typing import Any, List, Optional, Union
+from typing import Any, Optional, Union
 from .errors import AttenuationError
 
 class AttenuationBuildMixin:
@@ -28,8 +28,13 @@ class AttenuationBuildMixin:
             )
 
         from ..constants import TYPE_FIBER
+        from .calculator_pairs import pair_plan
 
-        if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
+        plan = pair_plan(obj1_type, obj2_type)
+
+        if plan.strategy == "fn_corridor" or (
+            obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER
+        ):
             cg = self._build_cgraph_via_fngraph(
                 int(obj1_id), int(obj2_id),
                 port1=obj1_port, port2=obj2_port,
@@ -41,16 +46,33 @@ class AttenuationBuildMixin:
                 self.g = cg
                 return
 
-        g1 = self._build_cgraph_from(obj1_type, obj1_id, side=obj1_side, port=obj1_port)
-        if g1 is not None and has_obj(g1, obj1_type, obj1_id) and has_obj(g1, obj2_type, obj2_id):
-            self.g = g1
-            return
+        if plan.strategy == "from_b":
+            order = [
+                ("b", obj2_type, obj2_id, obj2_side, obj2_port),
+                ("a", obj1_type, obj1_id, obj1_side, obj1_port),
+            ]
+        elif plan.strategy == "from_a":
+            order = [
+                ("a", obj1_type, obj1_id, obj1_side, obj1_port),
+                ("b", obj2_type, obj2_id, obj2_side, obj2_port),
+            ]
+        else:
+            order = [
+                ("a", obj1_type, obj1_id, obj1_side, obj1_port),
+                ("b", obj2_type, obj2_id, obj2_side, obj2_port),
+            ]
 
-        g2 = self._build_cgraph_from(obj2_type, obj2_id, side=obj2_side, port=obj2_port)
-        if g2 is not None and has_obj(g2, obj1_type, obj1_id) and has_obj(g2, obj2_type, obj2_id):
-            self.g = g2
-            return
+        built = {}
+        for key, ot, oid, side, port in order:
+            g = self._build_cgraph_from(ot, oid, side=side, port=port)
+            built[key] = g
+            if g is not None and has_obj(g, obj1_type, obj1_id) and has_obj(
+                g, obj2_type, obj2_id
+            ):
+                self.g = g
+                return
 
+        g1, g2 = built.get("a"), built.get("b")
         candidates = [g for g in (g1, g2) if g is not None]
         if len(candidates) == 2:
             try:
@@ -65,7 +87,9 @@ class AttenuationBuildMixin:
                 pass
 
         for g in (g1, g2, self.g):
-            if g is not None and (has_obj(g, obj1_type, obj1_id) or has_obj(g, obj2_type, obj2_id)):
+            if g is not None and (
+                has_obj(g, obj1_type, obj1_id) or has_obj(g, obj2_type, obj2_id)
+            ):
                 self.g = g
                 break
 
@@ -98,49 +122,14 @@ class AttenuationBuildMixin:
             return None
         return cg
 
-    def _require_inputs(
-        self, obj1_type, obj1_id, obj1_port, obj1_side,
-        obj2_type, obj2_id, obj2_port, obj2_side,
-    ) -> None:
-        from ..constants import (
-            TYPE_FIBER, TYPE_CROSS, TYPE_SPLITTER, TYPE_CWDM,
-            TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER,
-        )
-        known = {
-            TYPE_FIBER, TYPE_CROSS, TYPE_SPLITTER, TYPE_CWDM,
-            TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER,
-        }
-        for label, otype, oid in (
-            ("obj1", obj1_type, obj1_id), ("obj2", obj2_type, obj2_id),
-        ):
-            if not otype:
-                raise AttenuationError(f"{label}_type не задан")
-            if oid is None or oid == "":
-                raise AttenuationError(f"{label}_id не задан")
-            if otype not in known:
-                raise AttenuationError(
-                    f"неизвестный тип {label}: {otype!r} (допустимы: {sorted(known)})"
-                )
-        for label, otype, side in (
-            ("obj1", obj1_type, obj1_side), ("obj2", obj2_type, obj2_side),
-        ):
-            if otype == TYPE_FIBER and side is None:
-                raise AttenuationError(
-                    f"для кабеля ({label}) укажите side (1|2) — сторону сооружения"
-                )
-        if obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER:
-            if obj1_port is None and obj2_port is None:
-                raise AttenuationError(
-                    "для fiber↔fiber укажите port (номер ОВ) хотя бы у одного конца"
-                )
-
     def _require_fiber_port(
         self, obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
         obj1_side=None, obj2_side=None,
-    ) -> None:
-        self._require_inputs(
-            obj1_type, obj1_id, obj1_port, obj1_side,
-            obj2_type, obj2_id, obj2_port, obj2_side,
+    ):
+        from .calculator_pairs import validate_pair_inputs
+        return validate_pair_inputs(
+            obj1_type, obj1_id, obj1_side, obj1_port,
+            obj2_type, obj2_id, obj2_side, obj2_port,
         )
 
     def _pick_endpoint_pair(

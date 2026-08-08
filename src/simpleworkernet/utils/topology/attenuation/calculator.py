@@ -61,7 +61,7 @@ class Attenuation(
         if use_max is not None:
             self.use_max = bool(use_max)
         try:
-            self._require_fiber_port(
+            plan = self._require_fiber_port(
                 obj1_type, obj1_id, obj1_port,
                 obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
@@ -76,19 +76,29 @@ class Attenuation(
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
+            qmeta = {
+                "obj1_type": obj1_type, "obj1_id": obj1_id,
+                "obj1_side": obj1_side, "obj1_port": obj1_port,
+                "obj2_type": obj2_type, "obj2_id": obj2_id,
+                "obj2_side": obj2_side, "obj2_port": obj2_port,
+                "strategy": getattr(plan, "strategy", None),
+            }
             if v1 == v2:
                 return PathReport(
                     wavelength_nm=self.wavelength,
                     from_label=_label_vertex(self._vertex_attrs(v1)),
                     to_label=_label_vertex(self._vertex_attrs(v2)),
                     total_db=0.0, vertex_path=[v1],
+                    query_meta=qmeta,
                 )
             vpath = self.shortest_path(v1, v2)
             if not vpath or len(vpath) < 2:
                 raise AttenuationError(
                     f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
                 )
-            return self._report_from_vpath(vpath, direction=direction)
+            report = self._report_from_vpath(vpath, direction=direction)
+            report.query_meta = qmeta
+            return report
         finally:
             self.wavelength = prev_wl
             self.use_max = prev_max

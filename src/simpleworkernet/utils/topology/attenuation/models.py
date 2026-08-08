@@ -1,17 +1,15 @@
 # simpleworkernet/utils/topology/attenuation/models.py
 """Модели отчёта и сегментов затухания."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from pathlib import Path
+from typing import List, Optional, Union
 
 
 @dataclass
 class AttenuationSegment:
-    """Один вклад в суммарное затухание на пути."""
-
-    kind: str  # fiber | splitter | splice | adapter | connector | force | unknown
+    kind: str
     db: float
     description: str = ""
     obj_type: Optional[str] = None
@@ -19,9 +17,9 @@ class AttenuationSegment:
     port: Optional[int] = None
     side: Optional[int] = None
     length_m: Optional[float] = None
-    length_source: Optional[str] = None  # opticalen2 | opticalen | geo | geo_api | forced | none
+    length_source: Optional[str] = None
     wavelength_nm: Optional[int] = None
-    source: str = "default"  # force | profile | default | estimated
+    source: str = "default"
     meta: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -40,20 +38,36 @@ class AttenuationSegment:
             "meta": self.meta,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "AttenuationSegment":
+        return cls(
+            kind=str(d.get("kind") or "unknown"),
+            db=float(d.get("db") or 0.0),
+            description=str(d.get("description") or ""),
+            obj_type=d.get("obj_type"),
+            obj_id=str(d["obj_id"]) if d.get("obj_id") is not None else None,
+            port=int(d["port"]) if d.get("port") is not None else None,
+            side=int(d["side"]) if d.get("side") is not None else None,
+            length_m=float(d["length_m"]) if d.get("length_m") is not None else None,
+            length_source=d.get("length_source"),
+            wavelength_nm=int(d["wavelength_nm"]) if d.get("wavelength_nm") is not None else None,
+            source=str(d.get("source") or "default"),
+            meta=dict(d.get("meta") or {}),
+        )
+
 
 @dataclass
 class PathReport:
-    """Результат расчёта затухания вдоль пути."""
-
     total_db: float = 0.0
     wavelength_nm: int = 1550
     segments: List[AttenuationSegment] = field(default_factory=list)
     vertex_path: List[int] = field(default_factory=list)
-    direction: str = ""  # downstream | upstream | unknown
+    direction: str = ""
     from_label: str = ""
     to_label: str = ""
     warnings: List[str] = field(default_factory=list)
     missing: List[str] = field(default_factory=list)
+    query_meta: dict = field(default_factory=dict)
 
     @property
     def length_m(self) -> float:
@@ -70,8 +84,7 @@ class PathReport:
     @property
     def passive_db(self) -> float:
         return sum(
-            s.db
-            for s in self.segments
+            s.db for s in self.segments
             if s.kind in ("splice", "adapter", "connector")
         )
 
@@ -83,9 +96,8 @@ class PathReport:
 
     def to_table(self) -> str:
         lines = [
-            f"Path: {self.from_label} → {self.to_label}  "
-            f"[{self.direction}]  λ={self.wavelength_nm} nm",
-            f"Total: {self.total_db:.3f} dB  "
+            f"{self.from_label} → {self.to_label}  λ={self.wavelength_nm} nm  "
+            f"total={self.total_db:.3f} dB "
             f"(fiber={self.fiber_db:.3f}, splitter={self.splitter_db:.3f}, "
             f"passive={self.passive_db:.3f})  L={self.length_m:.1f} m",
             "-" * 72,
@@ -107,7 +119,8 @@ class PathReport:
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
+            "schema": "simpleworkernet.attenuation.PathReport/v1",
             "total_db": round(self.total_db, 4),
             "wavelength_nm": self.wavelength_nm,
             "direction": self.direction,
@@ -120,6 +133,42 @@ class PathReport:
             "warnings": self.warnings,
             "missing": self.missing,
         }
+        if self.query_meta:
+            for k, v in self.query_meta.items():
+                if k not in d and v is not None:
+                    d[k] = v
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PathReport":
+        segs = [AttenuationSegment.from_dict(s) for s in (d.get("segments") or [])]
+        meta_keys = (
+            "obj1_type", "obj1_id", "obj1_side", "obj1_port",
+            "obj2_type", "obj2_id", "obj2_side", "obj2_port",
+            "computed_at", "strategy", "host",
+        )
+        qm = {k: d[k] for k in meta_keys if k in d}
+        return cls(
+            total_db=float(d.get("total_db") or 0.0),
+            wavelength_nm=int(d.get("wavelength_nm") or 1550),
+            segments=segs,
+            vertex_path=list(d.get("vertex_path") or []),
+            direction=str(d.get("direction") or ""),
+            from_label=str(d.get("from") or d.get("from_label") or ""),
+            to_label=str(d.get("to") or d.get("to_label") or ""),
+            warnings=list(d.get("warnings") or []),
+            missing=list(d.get("missing") or []),
+            query_meta=qm,
+        )
+
+    def save(self, path: Optional[Union[str, Path]] = None, **kwargs) -> Path:
+        from .report_io import save_path_report
+        return save_path_report(self, path, **kwargs)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "PathReport":
+        from .report_io import load_path_report
+        return load_path_report(path)
 
     def __repr__(self) -> str:
         return (
