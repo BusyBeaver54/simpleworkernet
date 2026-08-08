@@ -1,25 +1,32 @@
 # simpleworkernet/utils/topology/attenuation/calculator_edge.py
-"""Edge segment resolution for Attenuation."""
+"""Edge → attenuation segments."""
 from __future__ import annotations
-from typing import List
+from typing import List, Optional
 from ..constants import TYPE_CROSS, TYPE_FIBER, TYPE_SPLITTER
 from .models import AttenuationSegment
 
 class AttenuationEdgeMixin:
-    def _segment_on_edge(self, u: int, v: int, direction: str) -> List[AttenuationSegment]:
+    def _edge_segments(
+        self,
+        u: int,
+        v: int,
+        *,
+        direction: str = "unknown",
+    ) -> List[AttenuationSegment]:
         segs: List[AttenuationSegment] = []
-        ua, va = self._vertex_attrs(u), self._vertex_attrs(v)
-        eid = -1
+        ua = self._vertex_attrs(u)
+        va = self._vertex_attrs(v)
         try:
-            eid = self.g.get_eid(u, v, directed=False, error=False)
+            eid = self.g.get_eid(u, v, error=False)
         except Exception:
             eid = -1
-        edge_attrs: dict = {}
+        is_internal = False
+        connect_id = None
         if eid is not None and eid >= 0:
-            e = self.g.es[eid]
-            edge_attrs = {k: e[k] for k in e.attributes()}
-        connect_id = int(edge_attrs.get("connect_id") or 0)
-        is_internal = bool(edge_attrs.get("is_internal", False))
+            eattrs = self.g.es[eid].attributes()
+            is_internal = bool(eattrs.get("is_internal", False))
+            connect_id = eattrs.get("connect_id")
+
         forced_edge = self.catalog.forced_edge_db(connect_id) if connect_id else None
         if forced_edge is not None:
             segs.append(AttenuationSegment(
@@ -35,8 +42,10 @@ class AttenuationEdgeMixin:
         ):
             segs.extend(self._fiber_segments(ua))
             return segs
-        if is_internal and (
-            ua.get("obj_type") == TYPE_SPLITTER and va.get("obj_type") == TYPE_SPLITTER
+        # IL сплиттера: ребро между сторонами одного сплиттера
+        if (
+            ua.get("obj_type") == TYPE_SPLITTER
+            and va.get("obj_type") == TYPE_SPLITTER
             and str(ua.get("obj_id")) == str(va.get("obj_id"))
         ):
             out_v = self._splitter_out_vertex(ua, va)
