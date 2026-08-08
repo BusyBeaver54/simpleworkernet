@@ -5,7 +5,7 @@
 Публичный API:
     Topology, CGraph, FNGraph, DataCache, ObjKey, Interface,
     Attenuation, AttenuationCatalog, PathReport,
-    константы типов объектов.
+    константы типов объектов (TYPE_*).
 """
 
 from .constants import (
@@ -21,6 +21,7 @@ from .constants import (
     DEVICE_TYPES,
     SIDE_TYPES,
     TERMINAL_TYPES,
+    ALL_OBJECT_TYPES,
 )
 from .keys import ObjKey, Interface
 from .models import CGraphVertex, CGraphEdge, FNGraphVertex, FNGraphEdge
@@ -49,6 +50,7 @@ __all__ = [
     "DEVICE_TYPES",
     "SIDE_TYPES",
     "TERMINAL_TYPES",
+    "ALL_OBJECT_TYPES",
     # keys
     "ObjKey",
     "Interface",

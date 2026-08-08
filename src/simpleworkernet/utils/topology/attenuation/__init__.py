@@ -2,18 +2,28 @@
 """
 Расчёт оптических затуханий по CGraph (по запросу).
 
-    cat = generate_template(client, ("PLC", "FBT"))
-    cat = load_attenuation_catalog(client)
-    att = Attenuation(catalog=cat, client=client, cache=cache)
-    r = att.calculate(
-        "fiber", 13259, "fiber", 13235,
-        obj1_side=2, obj1_port=1, obj2_side=2, obj2_port=1,
-        wavelength=1490,
-    )
-    path = r.save()                 # ~/.config/simpleworkernet/attenuation_reports/...
-    r2 = PathReport.load(path)
+Константы типов — из topology.constants (не дублировать локально):
+
+    from simpleworkernet.utils.topology import TYPE_FIBER, TYPE_OLT, ...
+    # или
+    from simpleworkernet.utils.topology.constants import TYPE_FIBER
 """
 
+from ..constants import (
+    TYPE_CUSTOMER,
+    TYPE_FIBER,
+    TYPE_SPLITTER,
+    TYPE_CROSS,
+    TYPE_CWDM,
+    TYPE_SWITCH,
+    TYPE_OLT,
+    TYPE_ONU,
+    TYPE_RADIO,
+    DEVICE_TYPES,
+    SIDE_TYPES,
+    TERMINAL_TYPES,
+    ALL_OBJECT_TYPES,
+)
 from .catalog import AttenuationCatalog, guess_ratio_key
 from .models import AttenuationSegment, PathReport
 from .calculator import Attenuation, AttenuationError
@@ -33,6 +43,21 @@ from .report_io import (
 from .calculator_pairs import pair_plan, validate_pair_inputs, PairPlan
 
 __all__ = [
+    # shared type constants
+    "TYPE_CUSTOMER",
+    "TYPE_FIBER",
+    "TYPE_SPLITTER",
+    "TYPE_CROSS",
+    "TYPE_CWDM",
+    "TYPE_SWITCH",
+    "TYPE_OLT",
+    "TYPE_ONU",
+    "TYPE_RADIO",
+    "DEVICE_TYPES",
+    "SIDE_TYPES",
+    "TERMINAL_TYPES",
+    "ALL_OBJECT_TYPES",
+    # attenuation API
     "Attenuation",
     "AttenuationError",
     "AttenuationCatalog",

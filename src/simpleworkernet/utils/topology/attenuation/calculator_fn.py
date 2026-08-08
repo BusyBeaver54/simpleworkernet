@@ -3,12 +3,16 @@
 from __future__ import annotations
 from typing import Any, Set
 
+from ..constants import TYPE_FIBER
+
+
 def _log():
     try:
         from ....core.logger import log
         return log
     except Exception:
         return None
+
 
 class AttenuationFNMixin:
     def _build_cgraph_via_fngraph(
@@ -34,17 +38,20 @@ class AttenuationFNMixin:
                 f"fiber {fiber2_id} side={side2} → node {end_node}"
             )
         if start_node is None or end_node is None:
-            if lg: lg.warning("FN-corridor: нет node_id для сторон кабелей")
+            if lg:
+                lg.warning("FN-corridor: нет node_id для сторон кабелей")
             return None
 
         fn = FNGraph(self.client, cache=self.cache)
         try:
             fn.build(start_node)
         except Exception as e:
-            if lg: lg.warning(f"FNGraph.build({start_node}) failed: {e}")
+            if lg:
+                lg.warning(f"FNGraph.build({start_node}) failed: {e}")
             return None
         if fn.vcount() == 0:
-            if lg: lg.warning("FN-corridor: FNGraph пустой")
+            if lg:
+                lg.warning("FN-corridor: FNGraph пустой")
             return None
 
         node_to_v = {int(v["node_id"]): v.index for v in fn.vs}
@@ -65,10 +72,12 @@ class AttenuationFNMixin:
         try:
             paths = fn.get_shortest_paths(node_to_v[start_node], node_to_v[end_node])
         except Exception as e:
-            if lg: lg.warning(f"FN path failed: {e}")
+            if lg:
+                lg.warning(f"FN path failed: {e}")
             return None
         if not paths or not paths[0]:
-            if lg: lg.warning(f"FN-corridor: нет пути {start_node} → {end_node}")
+            if lg:
+                lg.warning(f"FN-corridor: нет пути {start_node} → {end_node}")
             return None
         best_path = paths[0]
         if lg:
@@ -111,15 +120,23 @@ class AttenuationFNMixin:
                     kw = dict(port=p, side=s, included_fibers=corridor)
                     if use_exc and excluded:
                         kw["excluded_fibers"] = excluded
-                    cg.build("fiber", start_fid, **kw)
+                    cg.build(TYPE_FIBER, start_fid, **kw)
                 except Exception as e:
-                    if lg: lg.debug(f"CGraph from {start_fid}: {e}")
+                    if lg:
+                        lg.debug(f"CGraph from {start_fid}: {e}")
                     continue
                 if cg.vcount() == 0:
                     continue
-                ids = {str(v["obj_id"]) for v in cg.vs if v["obj_type"] == "fiber"}
+                ids = {
+                    str(v["obj_id"])
+                    for v in cg.vs
+                    if v["obj_type"] == TYPE_FIBER
+                }
                 if str(fiber1_id) in ids and str(fiber2_id) in ids:
                     if lg:
-                        lg.info(f"FN-corridor: CGraph ok from fiber:{start_fid} v={cg.vcount()}")
+                        lg.info(
+                            f"FN-corridor: CGraph ok from fiber:{start_fid} "
+                            f"v={cg.vcount()}"
+                        )
                     return cg
         return None
