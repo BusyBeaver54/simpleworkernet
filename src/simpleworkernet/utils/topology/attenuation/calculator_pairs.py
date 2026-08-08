@@ -4,15 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Set
 
-from ..constants import (
+from ...constants import (
     TYPE_FIBER,
     TYPE_CROSS,
     TYPE_SPLITTER,
     TYPE_CWDM,
     TYPE_OLT,
     TYPE_SWITCH,
-    TYPE_ONU,
-    TYPE_RADIO,
     TYPE_CUSTOMER,
     ALL_OBJECT_TYPES,
 )

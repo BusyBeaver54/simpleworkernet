@@ -34,6 +34,22 @@ from .graphics import (
     svg_to_png,
 )
 
+from .constants import (
+    TYPE_CUSTOMER,
+    TYPE_FIBER,
+    TYPE_SPLITTER,
+    TYPE_CROSS,
+    TYPE_CWDM,
+    TYPE_SWITCH,
+    TYPE_OLT,
+    TYPE_ONU,
+    TYPE_RADIO,
+    DEVICE_TYPES,
+    SIDE_TYPES,
+    TERMINAL_TYPES,
+    ALL_OBJECT_TYPES,
+)
+
 from .topology import CGraph, FNGraph, Topology
 
 __all__ = [
@@ -59,6 +75,20 @@ __all__ = [
     "load_svg",
     "is_svg",
     "svg_to_png",
+    # object type constants
+    "TYPE_CUSTOMER",
+    "TYPE_FIBER",
+    "TYPE_SPLITTER",
+    "TYPE_CROSS",
+    "TYPE_CWDM",
+    "TYPE_SWITCH",
+    "TYPE_OLT",
+    "TYPE_ONU",
+    "TYPE_RADIO",
+    "DEVICE_TYPES",
+    "SIDE_TYPES",
+    "TERMINAL_TYPES",
+    "ALL_OBJECT_TYPES",
     "CGraph",
     "FNGraph",
     "Topology",

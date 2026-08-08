@@ -2,14 +2,12 @@
 """
 Расчёт оптических затуханий по CGraph (по запросу).
 
-Константы типов — из topology.constants (не дублировать локально):
+Константы типов — из ``simpleworkernet.utils.constants``::
 
-    from simpleworkernet.utils.topology import TYPE_FIBER, TYPE_OLT, ...
-    # или
-    from simpleworkernet.utils.topology.constants import TYPE_FIBER
+    from simpleworkernet.utils.constants import TYPE_FIBER, TYPE_OLT
 """
 
-from ..constants import (
+from ...constants import (
     TYPE_CUSTOMER,
     TYPE_FIBER,
     TYPE_SPLITTER,
@@ -43,7 +41,6 @@ from .report_io import (
 from .calculator_pairs import pair_plan, validate_pair_inputs, PairPlan
 
 __all__ = [
-    # shared type constants
     "TYPE_CUSTOMER",
     "TYPE_FIBER",
     "TYPE_SPLITTER",
@@ -57,7 +54,6 @@ __all__ = [
     "SIDE_TYPES",
     "TERMINAL_TYPES",
     "ALL_OBJECT_TYPES",
-    # attenuation API
     "Attenuation",
     "AttenuationError",
     "AttenuationCatalog",
