@@ -11,16 +11,11 @@ from .keys import ObjKey, Interface
 from .models import CGraphVertex, CGraphEdge, FNGraphVertex, FNGraphEdge
 from .cache import DataCache
 from .graphs import CGraph, FNGraph
-from .topology import Topology
-from .topology_get_linear import apply_network_topology_api
+from .topology import NetworkTopology
 from .merge import merge_cgraphs, merge_fngraphs
 from .attenuation import (
     Attenuation, AttenuationCatalog, AttenuationSegment, PathReport, MultiPathReport,
 )
-
-# Topology → NetworkTopology (+ get_linear)
-NetworkTopology = apply_network_topology_api(Topology)
-Topology = NetworkTopology  # BC alias
 
 __all__ = [
     "TYPE_CUSTOMER", "TYPE_FIBER", "TYPE_SPLITTER", "TYPE_CROSS", "TYPE_CWDM",
@@ -31,7 +26,7 @@ __all__ = [
     "CGraphVertex", "CGraphEdge", "FNGraphVertex", "FNGraphEdge",
     "DataCache", "CGraph", "FNGraph",
     "merge_cgraphs", "merge_fngraphs",
-    "NetworkTopology", "Topology",
+    "NetworkTopology",
     "Attenuation", "AttenuationCatalog", "AttenuationSegment",
     "PathReport", "MultiPathReport",
 ]
