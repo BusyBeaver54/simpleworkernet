@@ -1,12 +1,9 @@
 # simpleworkernet/utils/topology/context.py
 """Контекст построения графа — единый носитель состояния BFS."""
-
 from __future__ import annotations
-
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING
-
 from .keys import Interface, ObjKey
 
 if TYPE_CHECKING:
@@ -17,12 +14,6 @@ if TYPE_CHECKING:
 
 @dataclass
 class BuildContext:
-    """
-    Состояние одного прохода построения CGraph.
-
-    Передаётся в handlers вместо десятка отдельных параметров.
-    """
-
     client: "WorkerNetClient"
     cache: "DataCache"
     graph: "CGraph"
@@ -34,6 +25,11 @@ class BuildContext:
     start_node_id: Optional[int] = None
     start_obj_key: Optional[ObjKey] = None
     start_iface: Optional[Interface] = None
+
+    allowed_ports: Optional[Set[int]] = None
+    linear: bool = False
+    linear_on_fail: str = "raise"
+    linear_violated: bool = False
 
     visited: Set[Interface] = field(default_factory=set)
     queue: deque = field(default_factory=deque)
@@ -62,3 +58,12 @@ class BuildContext:
         if iface not in self.visited:
             self.visited.add(iface)
             self.queue.append((iface, parent))
+
+    def mark_linear_violation(self, msg: str = "") -> None:
+        self.linear_violated = True
+        if self.linear and self.linear_on_fail == "raise":
+            from .errors import TopologyBuildError
+            raise TopologyBuildError(
+                f"линейный CGraph невозможен: {msg}" if msg
+                else "линейный CGraph невозможен на данном участке"
+            )
