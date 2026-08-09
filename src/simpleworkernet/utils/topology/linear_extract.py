@@ -1,10 +1,11 @@
 # simpleworkernet/utils/topology/linear_extract.py
 """Извлечение линейного подграфа из CGraph / FNGraph."""
 from __future__ import annotations
-from typing import Any, List, Optional, Sequence, Set, Tuple, Union
+from typing import List, Optional, Sequence, Union
 from .errors import TopologyBuildError
 from .keys import Interface, ObjKey
 from .constants import TERMINAL_TYPES
+from .paths import simple_paths, neighbors_undirected
 
 def find_vertices_by_obj(cg, obj_type, obj_id, side=None, port=None):
     hits = []
@@ -51,33 +52,11 @@ def subgraph_from_vpath(source_cg, vpath: Sequence[int]):
     return linear
 
 def _neighbors(cg, idx):
-    out = []
-    try:
-        for eid in cg.incident(idx, mode="all"):
-            edge = cg.es[eid]
-            out.append(edge.target if edge.source == idx else edge.source)
-    except Exception:
-        pass
-    return out
+    return neighbors_undirected(cg, idx)
 
 def _all_simple_paths(cg, source, target, cutoff=200):
-    results = []
-    stack = [(source, [source])]
-    while stack:
-        node, path = stack.pop()
-        if len(path) > cutoff:
-            continue
-        for n in _neighbors(cg, node):
-            if n in path:
-                continue
-            npath = path + [n]
-            if n == target:
-                results.append(npath)
-                if len(results) > 1:
-                    return results
-            else:
-                stack.append((n, npath))
-    return results
+    """Обёртка: все простые пути, early-stop при 2+ (для проверки ветвления)."""
+    return simple_paths(cg, source, target, cutoff=cutoff, max_paths=2)
 
 def _walk_unique(cg, start):
     path = [start]
@@ -130,10 +109,11 @@ def extract_linear_cgraph(cg, start_type, start_id, end_type=None, end_id=None, 
             for e in ends:
                 if s == e:
                     return subgraph_from_vpath(cg, [s])
-                paths = _all_simple_paths(cg, s, e)
+                # max_paths=2: достаточно чтобы обнаружить ветвление
+                paths = simple_paths(cg, s, e, max_paths=2)
                 if len(paths) > 1:
                     raise TopologyBuildError(
-                        f"ветвление: {len(paths)} путей между {start_type}:{start_id} и {end_type}:{end_id}"
+                        f"ветвление: несколько путей между {start_type}:{start_id} и {end_type}:{end_id}"
                     )
                 if len(paths) == 1 and (best is None or len(paths[0]) < len(best)):
                     best = paths[0]
@@ -167,23 +147,18 @@ def extract_linear_fngraph(fn, start_node_id, end_node_id=None):
         for nid, idx in node_to_v.items():
             if nid == start_node_id:
                 continue
-            try:
-                deg = fn.degree(idx)
-            except Exception:
-                deg = len(_neighbors(fn, idx))
+            deg = len(_neighbors(fn, idx))
             if deg <= 1:
                 leaves.append(nid)
         if not leaves:
             raise TopologyBuildError("FNGraph: нет конечных узлов")
         if len(leaves) > 1:
-            raise TopologyBuildError(
-                f"FNGraph: листьев={len(leaves)}, укажите end_node_id"
-            )
+            raise TopologyBuildError(f"FNGraph: листьев={len(leaves)}, укажите end_node_id")
         end_node_id = leaves[0]
     if end_node_id not in node_to_v:
         raise TopologyBuildError(f"узел {end_node_id} не в FNGraph")
     s, e = node_to_v[start_node_id], node_to_v[end_node_id]
-    paths = _all_simple_paths(fn, s, e)
+    paths = simple_paths(fn, s, e, max_paths=2)
     if not paths:
         raise TopologyBuildError(f"нет FN-пути {start_node_id}↔{end_node_id}")
     if len(paths) > 1:
