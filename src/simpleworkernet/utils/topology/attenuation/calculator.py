@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Tuple, Union
 from ..keys import Interface
 from .catalog import AttenuationCatalog
 from .models import PathReport
+from .multipath import MultiPathReport
 from .calculator_segments import AttenuationSegmentsMixin, _label_vertex
 from .calculator_path import AttenuationPathMixin
 from .calculator_edge import AttenuationEdgeMixin
@@ -24,14 +25,8 @@ class Attenuation(
     AttenuationPathMixin,
 ):
     def __init__(
-        self,
-        cgraph: Any = None,
-        *,
-        catalog: Optional[AttenuationCatalog] = None,
-        wavelength: int = 1550,
-        cache: Any = None,
-        client: Any = None,
-        use_max: bool = False,
+        self, cgraph: Any = None, *, catalog: Optional[AttenuationCatalog] = None,
+        wavelength: int = 1550, cache: Any = None, client: Any = None, use_max: bool = False,
     ) -> None:
         self.g = cgraph
         self.catalog = catalog or AttenuationCatalog.with_defaults()
@@ -41,20 +36,12 @@ class Attenuation(
         self.client = client if client is not None else getattr(cgraph, "client", None)
 
     def calculate(
-        self,
-        obj1_type: str,
-        obj1_id: Union[int, str],
-        obj2_type: str,
-        obj2_id: Union[int, str],
-        *,
-        wavelength: Optional[int] = None,
-        obj1_side: Optional[int] = None,
-        obj1_port: Optional[int] = None,
-        obj2_side: Optional[int] = None,
-        obj2_port: Optional[int] = None,
-        direction: Optional[str] = None,
-        use_max: Optional[bool] = None,
-    ) -> PathReport:
+        self, obj1_type: str, obj1_id: Union[int, str], obj2_type: str, obj2_id: Union[int, str],
+        *, wavelength: Optional[int] = None, obj1_side: Optional[int] = None, obj1_port: Optional[int] = None,
+        obj2_side: Optional[int] = None, obj2_port: Optional[int] = None,
+        direction: Optional[str] = None, use_max: Optional[bool] = None,
+    ):
+        """PathReport (1 путь) или MultiPathReport (несколько ветвей)."""
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
@@ -62,8 +49,7 @@ class Attenuation(
             self.use_max = bool(use_max)
         try:
             plan = self._require_fiber_port(
-                obj1_type, obj1_id, obj1_port,
-                obj2_type, obj2_id, obj2_port,
+                obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
             )
             self._ensure_cgraph(
@@ -88,17 +74,28 @@ class Attenuation(
                     wavelength_nm=self.wavelength,
                     from_label=_label_vertex(self._vertex_attrs(v1)),
                     to_label=_label_vertex(self._vertex_attrs(v2)),
-                    total_db=0.0, vertex_path=[v1],
-                    query_meta=qmeta,
+                    total_db=0.0, vertex_path=[v1], query_meta=qmeta,
                 )
-            vpath = self.shortest_path(v1, v2)
-            if not vpath or len(vpath) < 2:
+            paths = self.all_simple_paths(v1, v2)
+            if not paths:
                 raise AttenuationError(
                     f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
                 )
-            report = self._report_from_vpath(vpath, direction=direction)
-            report.query_meta = qmeta
-            return report
+            if len(paths) == 1:
+                report = self._report_from_vpath(paths[0], direction=direction)
+                report.query_meta = qmeta
+                return report
+            branches = []
+            for vp in paths:
+                r = self._report_from_vpath(vp, direction=direction)
+                r.query_meta = dict(qmeta)
+                branches.append(r)
+            return MultiPathReport(
+                branches=branches, wavelength_nm=self.wavelength,
+                from_label=_label_vertex(self._vertex_attrs(v1)),
+                to_label=_label_vertex(self._vertex_attrs(v2)),
+                warnings=[f"нелинейный CGraph: {len(branches)} ветвей"],
+            )
         finally:
             self.wavelength = prev_wl
             self.use_max = prev_max
@@ -107,9 +104,7 @@ class Attenuation(
         v = self.g.vs[idx]
         return {k: v[k] for k in v.attributes()}
 
-    def find_vertices(
-        self, obj_type=None, obj_id=None, *, side=None, port=None, node_id=None,
-    ) -> List[int]:
+    def find_vertices(self, obj_type=None, obj_id=None, *, side=None, port=None, node_id=None):
         found = []
         for v in self.g.vs:
             if obj_type is not None and v["obj_type"] != obj_type:
@@ -144,6 +139,33 @@ class Attenuation(
             port = int(parts[3]) if len(parts) > 3 else None
             return self.find_vertex(parts[0], parts[1], side=side, port=port)
         return None
+
+    def all_simple_paths(self, source: int, target: int, *, cutoff: int = 200) -> List[List[int]]:
+        results: List[List[int]] = []
+        stack = [(source, [source])]
+        while stack:
+            node, path = stack.pop()
+            if len(path) > cutoff:
+                continue
+            try:
+                eids = self.g.incident(node, mode="all")
+            except Exception:
+                eids = []
+            for eid in eids:
+                edge = self.g.es[eid]
+                n = edge.target if edge.source == node else edge.source
+                if n in path:
+                    continue
+                npath = path + [n]
+                if n == target:
+                    results.append(npath)
+                else:
+                    stack.append((n, npath))
+        if not results:
+            sp = self.shortest_path(source, target)
+            if sp:
+                results.append(sp)
+        return results
 
     def shortest_path(self, source: int, target: int) -> List[int]:
         try:
