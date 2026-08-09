@@ -242,7 +242,7 @@ class NetworkTopologyBuildMixin:
         if inc is not None and object_id not in inc:
             self.logger.warning(f"Кабель {object_id} не в included_fibers")
             return self
-        if exp_f is not None and object_id in exc_f:
+        if exc_f is not None and object_id in exc_f:
             self.logger.warning(f"Кабель {object_id} в excluded_fibers")
             return self
         fiber_ports = set()
