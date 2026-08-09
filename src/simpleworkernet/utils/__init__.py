@@ -15,7 +15,7 @@ from .constants import (
     TYPE_SWITCH, TYPE_OLT, TYPE_ONU, TYPE_RADIO,
     DEVICE_TYPES, SIDE_TYPES, TERMINAL_TYPES, ALL_OBJECT_TYPES,
 )
-from .topology import CGraph, FNGraph, NetworkTopology, Topology
+from .topology import CGraph, FNGraph, NetworkTopology
 
 __all__ = [
     "api_method", "logged_method", "log_method", "retry", "cache_result",
@@ -26,5 +26,5 @@ __all__ = [
     "TYPE_CUSTOMER", "TYPE_FIBER", "TYPE_SPLITTER", "TYPE_CROSS", "TYPE_CWDM",
     "TYPE_SWITCH", "TYPE_OLT", "TYPE_ONU", "TYPE_RADIO",
     "DEVICE_TYPES", "SIDE_TYPES", "TERMINAL_TYPES", "ALL_OBJECT_TYPES",
-    "CGraph", "FNGraph", "NetworkTopology", "Topology",
+    "CGraph", "FNGraph", "NetworkTopology",
 ]
