@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/topology_build_methods.py
 """build_from_* для NetworkTopology."""
 from __future__ import annotations
-from typing import Optional, Union
+from typing import Optional
 from .constants import TYPE_CROSS, TYPE_CUSTOMER, TYPE_CWDM, TYPE_FIBER, TYPE_SPLITTER
 from .keys import ObjKey
 from .merge import merge_cgraphs
@@ -22,14 +22,13 @@ class NetworkTopologyBuildMixin:
     ) -> "NetworkTopology":
         self._reset()
         self.logger.info(f"=== BUILD FROM DEVICE: {object_type}:{object_id} (port={port}) ===")
-        cg = self._build_cgraph(
+        self._attach(self._build_cgraph(
             object_type, object_id, port=port,
             included_fibers=_normalize_set(included_fibers),
             excluded_fibers=_normalize_set(excluded_fibers),
             excluded_nodes=_normalize_set(excluded_nodes),
             linear=linear, linear_on_fail=linear_on_fail,
-        )
-        self._attach(cg)
+        ))
         return self
 
     def build_from_customer(
@@ -38,13 +37,12 @@ class NetworkTopologyBuildMixin:
     ) -> "NetworkTopology":
         self._reset()
         self.logger.info(f"=== BUILD FROM CUSTOMER: {object_id} ===")
-        cg = self._build_cgraph(
+        self._attach(self._build_cgraph(
             TYPE_CUSTOMER, object_id, port=None,
             included_fibers=_normalize_set(included_fibers),
             excluded_fibers=_normalize_set(excluded_fibers),
             excluded_nodes=_normalize_set(excluded_nodes),
-        )
-        self._attach(cg)
+        ))
         return self
 
     def build_from_cross(
@@ -53,11 +51,12 @@ class NetworkTopologyBuildMixin:
     ) -> "NetworkTopology":
         self._reset()
         self.logger.info(f"=== BUILD FROM CROSS: {object_id} (port={port}, side={side}) ===")
-        inc, exc_f, exc_n = _normalize_set(included_fibers), _normalize_set(excluded_fibers), _normalize_set(excluded_nodes)
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
+        exc_n = _normalize_set(excluded_nodes)
         if port is None:
-            comms = self._get_commutations(TYPE_CROSS, object_id)
             ports = set()
-            for rec in comms:
+            for rec in self._get_commutations(TYPE_CROSS, object_id):
                 if getattr(rec, "clps_last", None) == "finish":
                     continue
                 p = int(rec.clps_mid) if rec.clps_mid is not None else 0
@@ -82,9 +81,8 @@ class NetworkTopologyBuildMixin:
         self._reset()
         self.logger.info(f"=== BUILD FROM SPLITTER: {object_id} (port={port}, side={side}) ===")
         if port is None and side is None:
-            comms = self._get_commutations(TYPE_SPLITTER, object_id)
             interfaces = set()
-            for rec in comms:
+            for rec in self._get_commutations(TYPE_SPLITTER, object_id):
                 if getattr(rec, "clps_last", None) == "finish":
                     continue
                 s = int(rec.clps_first) if rec.clps_first is not None else 1
@@ -123,9 +121,8 @@ class NetworkTopologyBuildMixin:
         self._reset()
         self.logger.info(f"=== BUILD FROM CWDM: {object_id} (port={port}, side={side}) ===")
         if port is None and side is None:
-            comms = self._get_commutations(TYPE_CWDM, object_id)
             interfaces = set()
-            for rec in comms:
+            for rec in self._get_commutations(TYPE_CWDM, object_id):
                 if getattr(rec, "clps_last", None) == "finish":
                     continue
                 s = int(rec.clps_first) if rec.clps_first is not None else 1
@@ -177,8 +174,9 @@ class NetworkTopologyBuildMixin:
     ) -> "NetworkTopology":
         self._reset()
         self.logger.info(f"=== BUILD FROM NODE: {object_id} ===")
-        inc, exc_f, exp_n = _normalize_set(included_fibers), _normalize_set(excluded_fibers), _normalize_set(excluded_nodes)
-        exc_n = exp_n
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
+        exc_n = _normalize_set(excluded_nodes)
         fn = FNGraph(self.client, cache=self.cache)
         fn.build(object_id, included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n)
         if fn.vcount() == 0:
@@ -186,7 +184,7 @@ class NetworkTopologyBuildMixin:
             return self
         self._set_fngraph(fn)
         for node_id in [v["node_id"] for v in fn.vs]:
-            if exc_n is not None and node_id in exp_n:
+            if exc_n is not None and node_id in exp_n if False else (exc_n is not None and node_id in exc_n):
                 continue
             for obj_type, obj_id, port_info in self._get_objects_for_node(node_id):
                 if self._find_cgraph_for_object(ObjKey(obj_type, obj_id)) is not None:
@@ -239,11 +237,12 @@ class NetworkTopologyBuildMixin:
     ) -> "NetworkTopology":
         self._reset()
         self.logger.info(f"=== BUILD FROM CABLE: {object_id} ===")
-        inc, exc_f = _normalize_set(included_fibers), _normalize_set(excluded_fibers)
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
         if inc is not None and object_id not in inc:
             self.logger.warning(f"Кабель {object_id} не в included_fibers")
             return self
-        if exc_f is not None and object_id in exp_f if False else (exc_f is not None and object_id in exc_f):
+        if exc_f is not None and object_id in exc_f:
             self.logger.warning(f"Кабель {object_id} в excluded_fibers")
             return self
         fiber_ports = set()
