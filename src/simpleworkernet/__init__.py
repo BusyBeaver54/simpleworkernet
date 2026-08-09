@@ -45,7 +45,7 @@ else:
     from .smartdata.metadata import MetaData, PathSegment, SegmentType
     from .utils.decorators import api_method, logged_method, timer
     from .utils.graphics import save_svg, load_svg, svg_to_png
-    from .utils.topology import Topology, CGraph, FNGraph
+    from .utils.topology import NetworkTopology, CGraph, FNGraph
     from .scripts.uninstall import cleanup_with_confirmation, cleanup
 
     if not _IN_CLEANUP:
@@ -181,5 +181,5 @@ else:
         'api_method', 'logged_method', 'timer',
         'additional_field', 'additional_data',
         'save_svg', 'load_svg', 'svg_to_png',
-        'CGraph', 'FNGraph', 'Topology',
+        'CGraph', 'FNGraph', 'NetworkTopology',
     ]
