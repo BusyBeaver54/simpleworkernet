@@ -3,8 +3,40 @@ from .cgraph import CGraph
 from .fngraph import FNGraph
 from .cgraph_extra import cgraph_is_linear
 
-# подмешиваем is_linear без раздувания cgraph.py
 if not hasattr(CGraph, "is_linear"):
     CGraph.is_linear = cgraph_is_linear  # type: ignore[attr-defined]
+
+_orig_build = CGraph.build
+
+def _build_with_ports(
+    self,
+    object_type,
+    object_id,
+    port=None,
+    ports=None,
+    port_ranges=None,
+    side=None,
+    included_fibers=None,
+    excluded_fibers=None,
+    excluded_nodes=None,
+    linear=False,
+    linear_on_fail="raise",
+):
+    from ..builders.base import GraphBuilder
+    return GraphBuilder(self).build(
+        object_type=object_type,
+        object_id=object_id,
+        port=port,
+        ports=ports,
+        port_ranges=port_ranges,
+        side=side,
+        included_fibers=included_fibers,
+        excluded_fibers=excluded_fibers,
+        excluded_nodes=excluded_nodes,
+        linear=linear,
+        linear_on_fail=linear_on_fail,
+    )
+
+CGraph.build = _build_with_ports  # type: ignore[method-assign]
 
 __all__ = ["CGraph", "FNGraph"]
