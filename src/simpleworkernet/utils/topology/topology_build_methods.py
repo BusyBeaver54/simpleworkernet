@@ -184,7 +184,7 @@ class NetworkTopologyBuildMixin:
             return self
         self._set_fngraph(fn)
         for node_id in [v["node_id"] for v in fn.vs]:
-            if exc_n is not None and node_id in exp_n if False else (exc_n is not None and node_id in exc_n):
+            if exc_n is not None and node_id in exc_n:
                 continue
             for obj_type, obj_id, port_info in self._get_objects_for_node(node_id):
                 if self._find_cgraph_for_object(ObjKey(obj_type, obj_id)) is not None:
@@ -242,7 +242,7 @@ class NetworkTopologyBuildMixin:
         if inc is not None and object_id not in inc:
             self.logger.warning(f"Кабель {object_id} не в included_fibers")
             return self
-        if exc_f is not None and object_id in exc_f:
+        if exp_f is not None and object_id in exc_f:
             self.logger.warning(f"Кабель {object_id} в excluded_fibers")
             return self
         fiber_ports = set()
