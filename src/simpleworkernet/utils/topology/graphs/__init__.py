@@ -6,15 +6,11 @@ from .cgraph_extra import cgraph_is_linear
 if not hasattr(CGraph, "is_linear"):
     CGraph.is_linear = cgraph_is_linear  # type: ignore[attr-defined]
 
-_orig_build = CGraph.build
-
 def _build_with_ports(
     self,
     object_type,
     object_id,
     port=None,
-    ports=None,
-    port_ranges=None,
     side=None,
     included_fibers=None,
     excluded_fibers=None,
@@ -27,8 +23,6 @@ def _build_with_ports(
         object_type=object_type,
         object_id=object_id,
         port=port,
-        ports=ports,
-        port_ranges=port_ranges,
         side=side,
         included_fibers=included_fibers,
         excluded_fibers=excluded_fibers,

@@ -1,5 +1,5 @@
 # simpleworkernet/utils/topology/builders/base.py
-"""GraphBuilder — BFS, порты/диапазоны, linear-режим."""
+"""GraphBuilder — BFS, единый port, linear-режим."""
 from __future__ import annotations
 from typing import List, Optional, Set, Union
 from ..constants import (
@@ -25,14 +25,14 @@ class GraphBuilder:
         self.logger = graph.logger
 
     def build(
-        self, object_type, object_id, port=None, ports=None, port_ranges=None,
+        self, object_type, object_id, port=None,
         side=None, included_fibers=None, excluded_fibers=None, excluded_nodes=None,
         linear=False, linear_on_fail="raise",
     ):
         g = self.graph
-        allowed = expand_ports(port=port, ports=ports, port_ranges=port_ranges)
+        allowed = expand_ports(port)
         self.logger.info(
-            f"=== CGraph {object_type}:{object_id} port={port} ports={ports} "
+            f"=== CGraph {object_type}:{object_id} port={port!r} "
             f"side={side} linear={linear} ==="
         )
         start_obj = g.load_object(ObjKey(object_type, object_id))

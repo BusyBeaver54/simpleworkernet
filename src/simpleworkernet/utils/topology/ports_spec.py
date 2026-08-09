@@ -1,55 +1,97 @@
 # simpleworkernet/utils/topology/ports_spec.py
-"""Нормализация спецификации портов: число, список, диапазоны, строка."""
+"""Единый параметр port — число, диапазон, список, строка."""
 from __future__ import annotations
-from typing import Iterable, List, Optional, Set, Tuple, Union
+from typing import Any, Iterable, List, Optional, Set, Tuple, Union
 
-PortSpec = Union[None, int, str, List[int], Set[int], Tuple[int, int], List[Tuple[int, int]]]
+# port=5
+# port=(1, 8)
+# port=[1, 2, (5, 8), 10]
+# port=[5]
+# port="1-8,10,12-15"
+PortSpec = Union[
+    None,
+    int,
+    str,
+    Tuple[int, int],
+    List[Any],
+    Set[int],
+]
 
 
-def expand_ports(
-    port: Optional[int] = None,
-    ports: PortSpec = None,
-    port_ranges: Optional[Union[Tuple[int, int], List[Tuple[int, int]]]] = None,
-) -> Optional[Set[int]]:
-    """Множество портов или None (= все).
+def expand_ports(port: PortSpec = None) -> Optional[Set[int]]:
+    """Разобрать port → множество номеров или None (= все порты).
 
-    expand_ports(port=5)
-    expand_ports(ports=[1,2,3])
-    expand_ports(ports="1-8,10,12-15")
-    expand_ports(port_ranges=[(1,8),(10,12)])
+    Форматы::
+
+        expand_ports(5)                    # {5}
+        expand_ports((1, 8))               # {1..8}
+        expand_ports([1, 2, (5, 8), 10])   # {1,2,5,6,7,8,10}
+        expand_ports([5])                  # {5}
+        expand_ports("1-8,10,12-15")        # {1..8,10,12..15}
+        expand_ports(None)                 # None — без ограничения
     """
-    result: Set[int] = set()
-    has_explicit = False
-    if port is not None:
-        result.add(int(port))
-        has_explicit = True
-    if ports is not None:
-        has_explicit = True
-        if isinstance(ports, int):
-            result.add(int(ports))
-        elif isinstance(ports, str):
-            result |= _parse_ports_string(ports)
-        elif isinstance(ports, tuple) and len(ports) == 2 and all(
-            isinstance(x, int) for x in ports
-        ):
-            a, b = int(ports[0]), int(ports[1])
-            result |= set(range(min(a, b), max(a, b) + 1))
-        else:
-            for item in ports:  # type: ignore[union-attr]
-                if isinstance(item, tuple) and len(item) == 2:
-                    a, b = int(item[0]), int(item[1])
-                    result |= set(range(min(a, b), max(a, b) + 1))
-                else:
-                    result.add(int(item))
-    if port_ranges is not None:
-        has_explicit = True
-        ranges = port_ranges if isinstance(port_ranges, list) else [port_ranges]
-        for a, b in ranges:
-            a, b = int(a), int(b)
-            result |= set(range(min(a, b), max(a, b) + 1))
-    if not has_explicit:
+    if port is None:
         return None
-    return result
+
+    result: Set[int] = set()
+
+    if isinstance(port, bool):
+        # bool is subclass of int — не принимаем
+        raise TypeError(f"port: неверный тип {type(port)!r}")
+
+    if isinstance(port, int):
+        result.add(int(port))
+        return result
+
+    if isinstance(port, str):
+        return _parse_ports_string(port)
+
+    if isinstance(port, tuple):
+        result |= _item_to_ports(port)
+        return result
+
+    if isinstance(port, (list, set, frozenset)):
+        if len(port) == 0:
+            return None
+        for item in port:
+            result |= _item_to_ports(item)
+        return result
+
+    # одиночное значение, приводимое к int (например numpy.int64)
+    try:
+        result.add(int(port))
+        return result
+    except (TypeError, ValueError):
+        raise TypeError(
+            f"port: неподдерживаемый формат {port!r} (type={type(port).__name__})"
+        )
+
+
+def _item_to_ports(item: Any) -> Set[int]:
+    """Один элемент списка/кортежа → множество портов."""
+    if isinstance(item, bool):
+        raise TypeError(f"port: неверный элемент {item!r}")
+    if isinstance(item, int):
+        return {int(item)}
+    if isinstance(item, str):
+        return _parse_ports_string(item)
+    if isinstance(item, tuple):
+        if len(item) != 2:
+            raise TypeError(
+                f"port: диапазон должен быть кортежем из 2 int, получено {item!r}"
+            )
+        a, b = int(item[0]), int(item[1])
+        return set(range(min(a, b), max(a, b) + 1))
+    if isinstance(item, list):
+        # вложенный список — разворачиваем
+        out: Set[int] = set()
+        for x in item:
+            out |= _item_to_ports(x)
+        return out
+    try:
+        return {int(item)}
+    except (TypeError, ValueError):
+        raise TypeError(f"port: неподдерживаемый элемент {item!r}")
 
 
 def _parse_ports_string(s: str) -> Set[int]:
