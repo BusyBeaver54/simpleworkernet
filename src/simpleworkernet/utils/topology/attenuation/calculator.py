@@ -12,6 +12,7 @@ from .calculator_edge import AttenuationEdgeMixin
 from .calculator_build import AttenuationBuildMixin
 from .calculator_fn import AttenuationFNMixin
 from .calculator_fiber import AttenuationFiberMixin
+from .calculator_paths import AttenuationPathsMixin
 from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
@@ -23,6 +24,7 @@ class Attenuation(
     AttenuationSegmentsMixin,
     AttenuationEdgeMixin,
     AttenuationPathMixin,
+    AttenuationPathsMixin,
 ):
     def __init__(
         self, cgraph: Any = None, *, catalog: Optional[AttenuationCatalog] = None,
@@ -139,49 +141,6 @@ class Attenuation(
             port = int(parts[3]) if len(parts) > 3 else None
             return self.find_vertex(parts[0], parts[1], side=side, port=port)
         return None
-
-    def all_simple_paths(self, source: int, target: int, *, cutoff: int = 200) -> List[List[int]]:
-        results: List[List[int]] = []
-        stack = [(source, [source])]
-        while stack:
-            node, path = stack.pop()
-            if len(path) > cutoff:
-                continue
-            try:
-                eids = self.g.incident(node, mode="all")
-            except Exception:
-                eids = []
-            for eid in eids:
-                edge = self.g.es[eid]
-                n = edge.target if edge.source == node else edge.source
-                if n in path:
-                    continue
-                npath = path + [n]
-                if n == target:
-                    results.append(npath)
-                else:
-                    stack.append((n, npath))
-        if not results:
-            sp = self.shortest_path(source, target)
-            if sp:
-                results.append(sp)
-        return results
-
-    def shortest_path(self, source: int, target: int) -> List[int]:
-        try:
-            paths = self.g.get_shortest_paths(source, target)
-            if paths and paths[0]:
-                return list(paths[0])
-        except TypeError:
-            try:
-                paths = self.g.get_shortest_paths(source, to=target, output="vpath")
-                if paths and paths[0]:
-                    return list(paths[0])
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return []
 
     def path(self, source: VertexRef, target: VertexRef, *, direction=None) -> PathReport:
         if self.g is None:
