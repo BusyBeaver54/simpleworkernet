@@ -16,7 +16,6 @@ _DEVICE_TYPES = frozenset({
     TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER,
 })
 
-# label вида "splitter:16926 side=2 port=4" / "Interface(...)"
 _IFACE_RE = re.compile(
     r"^(?:Interface\(|ObjKey\(|"
     r"(?:fiber|splitter|olt|customer|cross|switch|onu|radio|node|cwdm):)",
@@ -55,12 +54,10 @@ def _looks_like_iface_label(value: Any) -> bool:
 
 
 def _obj_display_name(vattrs: dict) -> Optional[str]:
-    """Имя объекта из модели (api_obj), НЕ из str(Interface)."""
     if not vattrs:
         return None
     obj = vattrs.get("api_obj")
     oid = str(vattrs.get("obj_id") or "")
-
     name = _attr(
         obj,
         "name", "title", "label", "caption",
@@ -70,14 +67,12 @@ def _obj_display_name(vattrs: dict) -> Optional[str]:
         s = str(name).strip()
         if s and not _looks_like_iface_label(s) and s != oid:
             return s
-
     for key in ("obj_name", "title", "label", "display_name"):
         v = vattrs.get(key)
         if v is not None and not _looks_like_iface_label(v):
             s = str(v).strip()
             if s and s != oid:
                 return s
-
     return None
 
 
@@ -99,18 +94,14 @@ def _olt_host(vattrs: dict) -> Optional[str]:
 
 
 def _cable_name(vattrs: dict) -> Optional[str]:
-    """Имя/марка кабеля из модели fiber, не id волокна."""
     if not vattrs:
         return None
     oid = str(vattrs.get("obj_id") or "")
-
     for key in ("cable_name", "cable_title", "fiber_name"):
         v = vattrs.get(key)
         if v not in (None, "") and str(v) != oid and not _looks_like_iface_label(v):
             return str(v)
-
     obj = vattrs.get("api_obj")
-
     for key in (
         "cable_name", "cabletype_name", "cable_type_name",
         "type_name", "cabletypename",
@@ -118,7 +109,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
         v = _attr(obj, key)
         if v not in (None, "") and str(v) != oid:
             return str(v)
-
     ct = _attr(obj, "cable_type", "cabletype", "cableType", "type")
     if ct is not None:
         if isinstance(ct, str) and ct.strip() and ct != oid and not ct.isdigit():
@@ -126,7 +116,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
         n = _attr(ct, "name", "title", "mark", "code")
         if n not in (None, "") and str(n) != oid:
             return str(n)
-
     for key in ("mark", "code", "name", "title"):
         v = _attr(obj, key)
         if v in (None, ""):
@@ -137,7 +126,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
         if _looks_like_iface_label(s):
             continue
         return s
-
     return None
 
 
@@ -284,7 +272,6 @@ class AttenuationSegmentsMixin:
         return _cable_name({"api_obj": fiber, "obj_id": fid}) if fiber is not None else None
 
     def _resolve_splitter_name(self, splitter_vertex_attrs: dict) -> Optional[str]:
-        """Имя сплиттера из модели / inventory."""
         name = _obj_display_name(splitter_vertex_attrs)
         if name:
             return name
