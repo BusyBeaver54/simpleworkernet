@@ -61,7 +61,6 @@ def _obj_display_name(vattrs: dict) -> Optional[str]:
     obj = vattrs.get("api_obj")
     oid = str(vattrs.get("obj_id") or "")
 
-    # 1) модель API — основной источник
     name = _attr(
         obj,
         "name", "title", "label", "caption",
@@ -72,7 +71,6 @@ def _obj_display_name(vattrs: dict) -> Optional[str]:
         if s and not _looks_like_iface_label(s) and s != oid:
             return s
 
-    # 2) явные поля вершины (не name — там str(iface))
     for key in ("obj_name", "title", "label", "display_name"):
         v = vattrs.get(key)
         if v is not None and not _looks_like_iface_label(v):
@@ -113,7 +111,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
 
     obj = vattrs.get("api_obj")
 
-    # явные поля типа кабеля
     for key in (
         "cable_name", "cabletype_name", "cable_type_name",
         "type_name", "cabletypename",
@@ -122,7 +119,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
         if v not in (None, "") and str(v) != oid:
             return str(v)
 
-    # вложенный объект типа кабеля
     ct = _attr(obj, "cable_type", "cabletype", "cableType", "type")
     if ct is not None:
         if isinstance(ct, str) and ct.strip() and ct != oid and not ct.isdigit():
@@ -131,7 +127,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
         if n not in (None, "") and str(n) != oid:
             return str(n)
 
-    # mark / code — только если это не числовой id
     for key in ("mark", "code", "name", "title"):
         v = _attr(obj, key)
         if v in (None, ""):
@@ -166,6 +161,45 @@ def _label_vertex(vattrs: dict) -> str:
 
 
 class AttenuationSegmentsMixin:
+    def _vertex_attrs(self, index: int) -> dict:
+        """Атрибуты вершины CGraph по индексу."""
+        if self.g is None:
+            return {}
+        try:
+            return dict(self.g.vs[int(index)].attributes())
+        except Exception:
+            try:
+                v = self.g.vs[int(index)]
+                return {k: v[k] for k in v.attributes()}
+            except Exception:
+                return {}
+
+    def _fiber_length_m(self, fiber_id) -> Tuple[Optional[float], str]:
+        """(length_m, source) — из cache или API-модели волокна."""
+        fid = int(fiber_id)
+        if self.cache is not None:
+            for name in ("get_fiber_length_m", "get_fiber_length"):
+                fn = getattr(self.cache, name, None)
+                if not callable(fn):
+                    continue
+                try:
+                    r = fn(fid)
+                    if r is None:
+                        continue
+                    if isinstance(r, (tuple, list)) and len(r) >= 2:
+                        return r[0], str(r[1])
+                    if isinstance(r, (int, float)):
+                        return float(r), "cache"
+                except Exception:
+                    pass
+        fiber = None
+        if hasattr(self, "_load_fiber"):
+            try:
+                fiber = self._load_fiber(fid)
+            except Exception:
+                fiber = None
+        return self._fiber_length(fid, fiber)
+
     def _direction_of_path(self, vpath: Sequence[int]) -> str:
         if not vpath:
             return "unknown"
@@ -257,7 +291,6 @@ class AttenuationSegmentsMixin:
         obj = splitter_vertex_attrs.get("api_obj")
         if obj is None:
             return None
-        # inventory.name часто содержит реальное имя
         inv_id = _attr(obj, "inventory_id")
         if inv_id is not None and self.cache is not None and self.client is not None:
             inv = None
