@@ -8,30 +8,61 @@ from ....core.logger import log
 
 _DEFAULTS_PATH = Path(__file__).with_name("defaults.json")
 
+
 def _wl_key(wavelength_nm: int) -> str:
     return str(int(wavelength_nm))
 
+
 def _as_db_pair(value: Any) -> Optional[Tuple[float, float]]:
+    """Обратная совместимость: (db_calc, db_max)."""
+    t = _as_db_triple(value)
+    if t is None:
+        return None
+    return t[1], t[2]
+
+
+def _as_db_triple(value: Any) -> Optional[Tuple[float, float, float]]:
+    """(db_min, db_calc, db_max) из числа или dict."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
         v = float(value)
-        return v, v
-    if isinstance(value, dict) and "db" in value:
-        db = float(value["db"])
-        db_max = float(value["db_max"]) if value.get("db_max") is not None else db
-        return db, db_max
+        return v, v, v
+    if isinstance(value, dict):
+        if "db" in value or "db_min" in value or "db_max" in value:
+            calc = value.get("db")
+            mn = value.get("db_min")
+            mx = value.get("db_max")
+            if calc is None and mn is not None and mx is not None:
+                calc = (float(mn) + float(mx)) / 2.0
+            if calc is None and mn is not None:
+                calc = float(mn)
+            if calc is None and mx is not None:
+                calc = float(mx)
+            if calc is None:
+                return None
+            calc = float(calc)
+            mn = float(mn) if mn is not None else calc
+            mx = float(mx) if mx is not None else calc
+            if mn > calc:
+                mn = calc
+            if mx < calc:
+                mx = calc
+            return mn, calc, mx
+        # вложенный attenuation уже развёрнут снаружи
     return None
 
+
 def _pick_wl(table: Dict[str, Any], wavelength_nm: int, *, context: str = ""):
+    """Вернуть (db_min, db_calc, db_max, used_wavelength) или None."""
     if not table:
         return None
     k = _wl_key(wavelength_nm)
     if k in table:
-        pair = _as_db_pair(table[k])
-        if pair is None:
+        triple = _as_db_triple(table[k])
+        if triple is None:
             return None
-        return pair[0], pair[1], wavelength_nm
+        return triple[0], triple[1], triple[2], wavelength_nm
     keys: List[int] = []
     for x in table.keys():
         try:
@@ -41,16 +72,30 @@ def _pick_wl(table: Dict[str, Any], wavelength_nm: int, *, context: str = ""):
     if not keys:
         return None
     nearest = min(keys, key=lambda x: abs(x - wavelength_nm))
-    pair = _as_db_pair(table[str(nearest)])
-    if pair is None:
+    triple = _as_db_triple(table[str(nearest)])
+    if triple is None:
         return None
     ctx = f" ({context})" if context else ""
     log.info(
         "attenuation: λ=%s nm не найдена%s — используем ближайшую λ=%s nm "
-        "(db=%.3f, db_max=%.3f)",
-        wavelength_nm, ctx, nearest, pair[0], pair[1],
+        "(min=%.3f, db=%.3f, max=%.3f)",
+        wavelength_nm, ctx, nearest, triple[0], triple[1], triple[2],
     )
-    return pair[0], pair[1], nearest
+    return triple[0], triple[1], triple[2], nearest
+
+
+def _pick_wl_mode(table, wavelength_nm, *, use_max=False, use_min=False, context=""):
+    """Одно значение: min / calc / max."""
+    picked = _pick_wl(table, wavelength_nm, context=context)
+    if picked is None:
+        return None
+    mn, calc, mx, _wl = picked
+    if use_min:
+        return mn
+    if use_max:
+        return mx
+    return calc
+
 
 def _port_entry_attenuation(entry: Any) -> Optional[Dict[str, Any]]:
     if entry is None or isinstance(entry, (int, float)):
@@ -62,39 +107,53 @@ def _port_entry_attenuation(entry: Any) -> Optional[Dict[str, Any]]:
             return entry
     return None
 
+
 def _port_name(entry: Any, fallback: str = "") -> str:
     if isinstance(entry, dict) and entry.get("name"):
         return str(entry["name"])
     return fallback
 
+
 _RATIO_DEFAULTS_CACHE = None
+
 
 def load_ratio_defaults() -> dict:
     """Шаблоны ratio из package defaults.json (не в user JSON)."""
     global _RATIO_DEFAULTS_CACHE
     if _RATIO_DEFAULTS_CACHE is not None:
         return _RATIO_DEFAULTS_CACHE
-    import json
-    data = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
-    sp = data.get("splitters") or {}
-    _RATIO_DEFAULTS_CACHE = (
-        sp.get("ratio_defaults") or sp.get("by_ratio") or {}
-    )
+    try:
+        import json
+        data = json.loads(_DEFAULTS_PATH.read_text(encoding="utf-8"))
+        sp = data.get("splitters") or {}
+        if isinstance(sp, dict):
+            _RATIO_DEFAULTS_CACHE = sp.get("ratio_defaults") or {}
+        else:
+            _RATIO_DEFAULTS_CACHE = {}
+    except Exception:
+        _RATIO_DEFAULTS_CACHE = {}
     return _RATIO_DEFAULTS_CACHE
 
-def ports_from_ratio_key(ratio: str) -> dict:
-    """ports из package ratio_defaults."""
-    import copy
-    if not ratio:
-        return {}
-    r = load_ratio_defaults().get(ratio) or {}
-    if r.get("ports"):
-        return copy.deepcopy(r["ports"])
-    if r.get("equal_db"):
-        return {"all": {"name": "equal", "attenuation": copy.deepcopy(r["equal_db"])}}
-    return {}
 
-_RATIO_PATTERNS: List[Tuple[re.Pattern, str]] = [
+def ports_from_ratio_key(ratio_key: Optional[str]) -> dict:
+    if not ratio_key:
+        return {}
+    rd = load_ratio_defaults()
+    entry = rd.get(ratio_key) or {}
+    return dict(entry.get("ports") or {})
+
+
+def guess_ratio_key(name: str) -> Optional[str]:
+    """Определить ключ ratio по имени каталога / модели сплиттера."""
+    if not name:
+        return None
+    for pat, key in _RATIO_PATTERNS:
+        if pat.search(name):
+            return key
+    return None
+
+
+_RATIO_PATTERNS = [
     (re.compile(r"(?:^|[^\d])5\s*[/x:]\s*95(?:[^\d]|$)", re.I), "1x2_5/95"),
     (re.compile(r"(?:^|[^\d])95\s*[/x:]\s*5(?:[^\d]|$)", re.I), "1x2_5/95"),
     (re.compile(r"(?:^|[^\d])10\s*[/x:]\s*90(?:[^\d]|$)", re.I), "1x2_10/90"),
@@ -124,22 +183,4 @@ _RATIO_PATTERNS: List[Tuple[re.Pattern, str]] = [
     (re.compile(r"1\s*[x×*]\s*4\b", re.I), "1x4_equal"),
     (re.compile(r"1\s*[x×*]\s*3\b", re.I), "1x3_equal"),
     (re.compile(r"1\s*[x×*]\s*2\b", re.I), "1x2_50/50"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*64(?:[^\d]|$)", re.I), "1x64_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*32(?:[^\d]|$)", re.I), "1x32_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*24(?:[^\d]|$)", re.I), "1x24_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*16(?:[^\d]|$)", re.I), "1x16_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*12(?:[^\d]|$)", re.I), "1x12_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*8(?:[^\d]|$)", re.I), "1x8_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*6(?:[^\d]|$)", re.I), "1x6_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*4(?:[^\d]|$)", re.I), "1x4_equal"),
-    (re.compile(r"(?:^|[^\d])1\s*:\s*3(?:[^\d]|$)", re.I), "1x3_equal"),
 ]
-
-def guess_ratio_key(name: str) -> Optional[str]:
-    """Определить ключ by_ratio по имени каталога / модели сплиттера."""
-    if not name:
-        return None
-    for pat, key in _RATIO_PATTERNS:
-        if pat.search(name):
-            return key
-    return None
