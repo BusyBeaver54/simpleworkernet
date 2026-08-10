@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator.py
 """Attenuation — calculate() between objects or over entire CGraph."""
 from __future__ import annotations
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Sequence, Tuple, Union
 from ..keys import Interface
 from ..constants import (
     TYPE_CUSTOMER, TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH,
@@ -25,6 +25,21 @@ _SINK_TYPES = frozenset({TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO})
 _SOURCE_TYPES = frozenset({TYPE_CUSTOMER}) | _SINK_TYPES
 
 
+def _is_network_topology(obj: Any) -> bool:
+    if obj is None:
+        return False
+    cgraphs = getattr(obj, "cgraphs", None)
+    return isinstance(cgraphs, list) and hasattr(obj, "client")
+
+
+def _is_cgraph_like(obj: Any) -> bool:
+    if obj is None:
+        return False
+    return hasattr(obj, "vs") and (
+        hasattr(obj, "vcount") or hasattr(obj, "get_eid") or hasattr(obj, "es")
+    )
+
+
 class Attenuation(
     AttenuationBuildMixin,
     AttenuationFNMixin,
@@ -35,26 +50,200 @@ class Attenuation(
     AttenuationPathsMixin,
 ):
     def __init__(
-        self, cgraph: Any = None, *, catalog: Optional[AttenuationCatalog] = None,
-        wavelength: int = 1550, cache: Any = None, client: Any = None, use_max: bool = False,
+        self,
+        cgraph: Any = None,
+        *,
+        topology: Any = None,
+        catalog: Optional[AttenuationCatalog] = None,
+        wavelength: int = 1550,
+        cache: Any = None,
+        client: Any = None,
+        use_max: bool = False,
     ) -> None:
-        self.g = cgraph
+        """Инициализация расчёта затуханий.
+
+        Параметры источника графа (любой из вариантов):
+
+        * ``cgraph`` — один CGraph, список CGraph **или** NetworkTopology
+        * ``topology`` — явно NetworkTopology (приоритет, если задан оба)
+
+        Примеры::
+
+            Attenuation(cgraph=cg)
+            Attenuation(cgraph=[cg1, cg2])
+            Attenuation(topology=nt)
+            Attenuation(cgraph=nt)
+            Attenuation(client=client)
+        """
+        self.topology: Any = None
+        self.cgraphs: List[Any] = []
+        self.g: Any = None
+
+        self.wavelength = int(wavelength)
+        self.use_max = bool(use_max)
+
+        self._bind_graphs(cgraph=cgraph, topology=topology)
+
+        if client is not None:
+            self.client = client
+        elif self.topology is not None:
+            self.client = getattr(self.topology, "client", None)
+        elif self.g is not None:
+            self.client = getattr(self.g, "client", None)
+        elif self.cgraphs:
+            self.client = getattr(self.cgraphs[0], "client", None)
+        else:
+            self.client = None
+
+        if cache is not None:
+            self.cache = cache
+        elif self.topology is not None:
+            self.cache = getattr(self.topology, "cache", None)
+        elif self.g is not None:
+            self.cache = getattr(self.g, "cache", None)
+        elif self.cgraphs:
+            self.cache = getattr(self.cgraphs[0], "cache", None)
+        else:
+            self.cache = None
+
         if catalog is not None:
             self.catalog = catalog
         else:
             loaded = None
-            client_ref = client if client is not None else getattr(cgraph, "client", None)
-            if client_ref is not None:
+            if self.client is not None:
                 try:
                     from .template import load_attenuation_catalog
-                    loaded = load_attenuation_catalog(client_ref)
+                    loaded = load_attenuation_catalog(self.client)
                 except Exception:
                     loaded = None
             self.catalog = loaded or AttenuationCatalog.with_defaults()
-        self.wavelength = int(wavelength)
-        self.use_max = bool(use_max)
-        self.cache = cache if cache is not None else getattr(cgraph, "cache", None)
-        self.client = client if client is not None else getattr(cgraph, "client", None)
+
+    def _bind_graphs(self, *, cgraph: Any = None, topology: Any = None) -> None:
+        self.topology = None
+        self.cgraphs = []
+        self.g = None
+
+        src = topology if topology is not None else cgraph
+        if src is None:
+            return
+
+        if topology is not None and cgraph is not None and topology is not cgraph:
+            src = topology
+
+        if _is_network_topology(src):
+            self.topology = src
+            self.cgraphs = [cg for cg in (src.cgraphs or []) if cg is not None]
+            if len(self.cgraphs) == 1:
+                self.g = self.cgraphs[0]
+            return
+
+        if isinstance(src, (list, tuple)):
+            self.cgraphs = [cg for cg in src if cg is not None]
+            if len(self.cgraphs) == 1:
+                self.g = self.cgraphs[0]
+            return
+
+        if _is_cgraph_like(src):
+            self.cgraphs = [src]
+            self.g = src
+            return
+
+        self.cgraphs = [src]
+        self.g = src
+
+    def _cgraph_has_object(
+        self,
+        cg: Any,
+        obj_type: str,
+        obj_id: Union[int, str],
+        side: Optional[int] = None,
+        port: Optional[int] = None,
+    ) -> bool:
+        if cg is None:
+            return False
+        try:
+            vs = cg.vs
+        except Exception:
+            return False
+        oid = str(obj_id)
+        for v in vs:
+            try:
+                if v["obj_type"] != obj_type:
+                    continue
+                if str(v["obj_id"]) != oid:
+                    continue
+            except Exception:
+                continue
+            if side is not None:
+                try:
+                    if int(v["side"] if v["side"] is not None else 0) != int(side):
+                        continue
+                except Exception:
+                    continue
+            if port is not None:
+                try:
+                    if int(v["port"] if v["port"] is not None else 0) != int(port):
+                        continue
+                except Exception:
+                    continue
+            return True
+        return False
+
+    def _select_cgraph_for_objects(
+        self,
+        obj1_type: str,
+        obj1_id: Union[int, str],
+        obj2_type: Optional[str] = None,
+        obj2_id: Optional[Union[int, str]] = None,
+        *,
+        obj1_side: Optional[int] = None,
+        obj1_port: Optional[int] = None,
+        obj2_side: Optional[int] = None,
+        obj2_port: Optional[int] = None,
+    ) -> None:
+        graphs = list(self.cgraphs) if self.cgraphs else (
+            [self.g] if self.g is not None else []
+        )
+        if not graphs:
+            self.g = None
+            return
+
+        if len(graphs) == 1:
+            self.g = graphs[0]
+            return
+
+        has_obj2 = obj2_type is not None and obj2_id is not None and obj2_id != ""
+
+        both: List[Any] = []
+        only1: List[Any] = []
+        for cg in graphs:
+            ok1 = self._cgraph_has_object(
+                cg, obj1_type, obj1_id, side=obj1_side, port=obj1_port,
+            )
+            if not ok1:
+                ok1 = self._cgraph_has_object(cg, obj1_type, obj1_id)
+            if not ok1:
+                continue
+            if has_obj2:
+                ok2 = self._cgraph_has_object(
+                    cg, obj2_type, obj2_id, side=obj2_side, port=obj2_port,
+                )
+                if not ok2:
+                    ok2 = self._cgraph_has_object(cg, obj2_type, obj2_id)
+                if ok2:
+                    both.append(cg)
+                else:
+                    only1.append(cg)
+            else:
+                only1.append(cg)
+
+        if both:
+            self.g = both[0]
+            return
+        if only1:
+            self.g = only1[0]
+            return
+        self.g = None
 
     def calculate(
         self,
@@ -74,21 +263,12 @@ class Attenuation(
     ):
         """Расчёт затухания.
 
-        Варианты вызова
-        ---------------
-        1. ``calculate(obj1_type, obj1_id, obj2_type=..., obj2_id=...)``
-           Путь между двумя объектами (obj2 необязателен → авто OLT/switch…).
+        1. ``calculate(obj1_type, obj1_id, ...)`` — путь между объектами.
+           При нескольких CGraph выбирается граф, где есть объекты.
 
-        2. ``calculate()`` при ``Attenuation(cgraph=...)``
-           Затухания по всему переданному CGraph:
-           пути customer→olt (и др. терминалы); при одной ветви — PathReport,
-           при нескольких — MultiPathReport.
+        2. ``calculate()`` — по всему CGraph / **всем** cgraph топологии.
 
-        3. ``calculate()`` без CGraph и без obj1 → ``AttenuationError``.
-
-        Returns
-        -------
-        PathReport | MultiPathReport
+        3. без графа и без obj1 → ``AttenuationError``.
         """
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
@@ -98,22 +278,20 @@ class Attenuation(
         try:
             has_obj1 = obj1_type is not None and obj1_id is not None and obj1_id != ""
 
-            # --- режим «весь CGraph» ---
             if not has_obj1:
-                if self.g is None:
-                    raise AttenuationError(
-                        "не указаны объекты для расчёта и CGraph не задан: "
-                        "передайте cgraph= в Attenuation(...) или "
-                        "obj1_type/obj1_id в calculate(...)"
-                    )
-                return self._calculate_full_cgraph(
+                return self._calculate_all_graphs(
                     direction=direction, max_paths=max_paths,
                 )
 
-            # --- обычный режим: obj1 → obj2 (obj2 optional) ---
             self._require_fiber_port(
                 obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
+            )
+
+            self._select_cgraph_for_objects(
+                obj1_type, obj1_id, obj2_type, obj2_id,
+                obj1_side=obj1_side, obj1_port=obj1_port,
+                obj2_side=obj2_side, obj2_port=obj2_port,
             )
 
             self._ensure_cgraph(
@@ -121,6 +299,8 @@ class Attenuation(
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
+            if self.g is not None and self.g not in self.cgraphs:
+                self.cgraphs.append(self.g)
 
             paths = self.find_paths(
                 obj1_type, obj1_id, obj2_type, obj2_id,
@@ -148,6 +328,59 @@ class Attenuation(
         finally:
             self.wavelength, self.use_max = prev_wl, prev_max
 
+    def _calculate_all_graphs(
+        self,
+        *,
+        direction: Optional[str] = None,
+        max_paths: int = 50,
+    ):
+        graphs = list(self.cgraphs) if self.cgraphs else (
+            [self.g] if self.g is not None else []
+        )
+        if not graphs:
+            raise AttenuationError(
+                "не указаны объекты для расчёта и CGraph не задан: "
+                "передайте cgraph=/topology= в Attenuation(...) или "
+                "obj1_type/obj1_id в calculate(...)"
+            )
+
+        if len(graphs) == 1:
+            self.g = graphs[0]
+            return self._calculate_full_cgraph(
+                direction=direction, max_paths=max_paths,
+            )
+
+        branches: List[PathReport] = []
+        errors: List[str] = []
+        for i, cg in enumerate(graphs):
+            self.g = cg
+            try:
+                res = self._calculate_full_cgraph(
+                    direction=direction, max_paths=max_paths,
+                )
+            except AttenuationError as e:
+                errors.append(f"cgraph[{i}]: {e}")
+                continue
+            if isinstance(res, PathReport):
+                branches.append(res)
+            elif isinstance(res, MultiPathReport):
+                branches.extend(res.branches)
+
+        if not branches:
+            detail = "; ".join(errors) if errors else "пусто"
+            raise AttenuationError(
+                f"не удалось посчитать ни один CGraph из {len(graphs)}: {detail}"
+            )
+        if len(branches) == 1:
+            return branches[0]
+        return MultiPathReport(
+            branches=branches,
+            wavelength_nm=self.wavelength,
+            from_label="",
+            to_label="",
+            warnings=errors,
+        )
+
     def _calculate_full_cgraph(
         self,
         *,
@@ -162,11 +395,9 @@ class Attenuation(
         sinks = self._vertices_of_types(_SINK_TYPES)
         customers = self._vertices_of_types({TYPE_CUSTOMER})
 
-        # предпочтительно customer → olt/switch
         pair_sources = customers if customers else sources
         pair_sinks = sinks
 
-        # если терминалов мало — берём «листья» (степень 1)
         if not pair_sources or not pair_sinks:
             leaves = self._leaf_vertices()
             if len(leaves) >= 2:
@@ -180,7 +411,6 @@ class Attenuation(
                 "в CGraph нет терминальных вершин (customer/olt/…) для расчёта"
             )
 
-        # если sinks пусты — пути от sources до остальных leaves
         if not pair_sinks:
             pair_sinks = [
                 v for v in self._leaf_vertices()
@@ -214,7 +444,6 @@ class Attenuation(
             if len(collected) >= max_paths:
                 break
 
-        # линейный граф: один путь по всем вершинам
         if not collected:
             linear = self._linear_cover_path()
             if linear and len(linear) >= 2:
@@ -247,7 +476,6 @@ class Attenuation(
         return out
 
     def _leaf_vertices(self) -> List[int]:
-        """Вершины со степенью 1 (концы линейных участков)."""
         if self.g is None:
             return []
         leaves: List[int] = []
@@ -265,10 +493,8 @@ class Attenuation(
         return leaves
 
     def _linear_cover_path(self) -> List[int]:
-        """Если граф линеен — путь от одного листа до другого."""
         leaves = self._leaf_vertices()
         if len(leaves) != 2:
-            # попробовать is_linear
             is_lin = getattr(self.g, "is_linear", None)
             if callable(is_lin):
                 try:
