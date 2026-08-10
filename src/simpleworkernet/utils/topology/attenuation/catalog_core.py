@@ -58,45 +58,23 @@ class CatalogCoreMixin:
     def from_json(cls, path):
         return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
-    @classmethod
-    def from_dict(cls, data):
-        return cls(copy.deepcopy(data))
-
-    def to_dict(self):
-        data = copy.deepcopy(self._data)
-        sp = data.get("splitters")
-        if isinstance(sp, dict):
-            items = sp.get("items") if isinstance(sp.get("items"), list) else []
-            data["splitters"] = items
-        return data
-
-    def save(self, path):
+    def to_json(self, path):
         Path(path).write_text(
-            json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(self._data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
 
-    def merge_from_json(self, path):
-        other = json.loads(Path(path).read_text(encoding="utf-8"))
-        self._deep_merge(self._data, other)
-        self._normalize_structure()
-
-    @staticmethod
-    def _deep_merge(dst, src):
-        for k, v in src.items():
-            if k in dst and isinstance(dst[k], dict) and isinstance(v, dict):
-                CatalogCoreMixin._deep_merge(dst[k], v)
-            elif k not in dst or dst[k] in (None, {}, []):
-                dst[k] = copy.deepcopy(v)
+    def copy(self):
+        return type(self)(copy.deepcopy(self._data))
 
     @property
     def defaults(self):
         return self._data.setdefault("defaults", {})
 
-    def fiber_db_per_km(self, wavelength_nm, *, use_max=False):
+    def fiber_db_per_km(self, wavelength_nm=1550, *, use_max=False):
         table = self.defaults.get("fiber_db_per_km", {})
         picked = _pick_wl(table, wavelength_nm, context="defaults.fiber_db_per_km")
         if picked is None:
-            return 0.25
+            return 0.2
         return picked[1] if use_max else picked[0]
 
     def splice_db(self, *, use_max=False):
@@ -104,16 +82,23 @@ class CatalogCoreMixin:
         return (pair[1] if use_max else pair[0]) if pair else 0.05
 
     def connector_db(self, *, use_max=False):
-        pair = _as_db_pair(self.defaults.get("connector_db", 0.3))
-        return (pair[1] if use_max else pair[0]) if pair else 0.3
+        # 0.15 dB — один коннектор (к кроссу / OLT / абоненту)
+        pair = _as_db_pair(self.defaults.get("connector_db", 0.15))
+        return (pair[1] if use_max else pair[0]) if pair else 0.15
 
     def adapter_db(self, adapter_type=None, *, use_max=False):
+        # 0.3 dB — вход+выход кросса целиком (два коннектора)
         adapters = self._data.setdefault("cross_adapters", {})
         raw = adapters.get(adapter_type) if adapter_type else None
         if raw is None:
-            raw = adapters.get("default", self.defaults.get("adapter_db", 0.2))
+            raw = adapters.get("default", self.defaults.get("adapter_db", 0.3))
         pair = _as_db_pair(raw)
-        return (pair[1] if use_max else pair[0]) if pair else 0.2
+        return (pair[1] if use_max else pair[0]) if pair else 0.3
+
+    def cross_loss_mode(self) -> str:
+        """adapter | connectors — как считать кросс."""
+        mode = self.defaults.get("cross_loss_mode", "adapter")
+        return mode if mode in ("adapter", "connectors") else "adapter"
 
     def geo_slack_k(self):
         return float(self.defaults.get("geo_slack_k", 1.03))
@@ -170,3 +155,18 @@ class CatalogCoreMixin:
             if picked is not None:
                 return picked[1] if use_max else picked[0]
         return self.fiber_db_per_km(wavelength_nm, use_max=use_max)
+
+    def fiber_db_per_km_for_cable(self, cable_name=None, wavelength_nm=1550, *, use_max=False):
+        return self.cable_db_per_km(name=cable_name, wavelength_nm=wavelength_nm, use_max=use_max)
+
+    def forced_edge_db(self, connect_id):
+        if connect_id is None:
+            return None
+        edges = self._data.get("force", {}).get("edges", {})
+        val = edges.get(str(connect_id))
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            return float(val)
+        pair = _as_db_pair(val)
+        return pair[0] if pair else None
