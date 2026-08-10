@@ -32,15 +32,19 @@ class AttenuationPathMixin:
                 except Exception:
                     length_m, length_source = None, "missing"
 
-        db_km, src = self.catalog.fiber_db_per_km(
+        # fiber_db_per_km возвращает float, не кортеж
+        db_km = self.catalog.fiber_db_per_km(
             wavelength_nm=self.wavelength,
             use_max=self.use_max,
         )
+        src = "default"
         # предпочтительно по имени кабеля
         try:
             if cable_name and hasattr(self.catalog, "cable_db_per_km"):
                 db_km = self.catalog.cable_db_per_km(
-                    name=cable_name, wavelength_nm=self.wavelength, use_max=self.use_max,
+                    name=cable_name,
+                    wavelength_nm=self.wavelength,
+                    use_max=self.use_max,
                 )
                 src = "cable"
         except Exception:
@@ -79,7 +83,11 @@ class AttenuationPathMixin:
         if splitter_obj is None or not port:
             return None
         for attr in ("ports", "port_list", "ifaces", "out_ports"):
-            ports = getattr(splitter_obj, attr, None) if not isinstance(splitter_obj, dict) else splitter_obj.get(attr)
+            ports = (
+                getattr(splitter_obj, attr, None)
+                if not isinstance(splitter_obj, dict)
+                else splitter_obj.get(attr)
+            )
             if not ports:
                 continue
             if isinstance(ports, dict):
@@ -101,8 +109,11 @@ class AttenuationPathMixin:
         return None
 
     def _splitter_segments(
-        self, splitter_vertex_attrs: dict, *,
-        direction: str = "unknown", edge_side=None,
+        self,
+        splitter_vertex_attrs: dict,
+        *,
+        direction: str = "unknown",
+        edge_side=None,
     ) -> List[AttenuationSegment]:
         splitter_id = splitter_vertex_attrs.get("obj_id")
         side = int(splitter_vertex_attrs.get("side") or edge_side or 0)
@@ -111,7 +122,11 @@ class AttenuationPathMixin:
         catalog_id = self._splitter_catalog_id(splitter_obj)
         pout = None
         if splitter_obj is not None:
-            pout = getattr(splitter_obj, "port_count_out", None) if not isinstance(splitter_obj, dict) else splitter_obj.get("port_count_out")
+            pout = (
+                getattr(splitter_obj, "port_count_out", None)
+                if not isinstance(splitter_obj, dict)
+                else splitter_obj.get("port_count_out")
+            )
         topology = None
         if splitter_obj is not None:
             if isinstance(splitter_obj, dict):
