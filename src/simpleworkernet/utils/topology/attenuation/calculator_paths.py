@@ -1,15 +1,11 @@
 # simpleworkernet/utils/topology/attenuation/calculator_paths.py
 """Поиск вершин и путей для Attenuation."""
 from __future__ import annotations
-from typing import List, Optional, Sequence, Union
+from typing import List, Optional
 from ..paths import simple_paths, shortest_simple_path
-from ..constants import (
-    TYPE_CUSTOMER, TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH,
-    TERMINAL_TYPES,
-)
+from ..constants import TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH
 from .errors import AttenuationError
 
-# «концы» линии PON / доступа — куда можно автоматически дойти от абонента
 _AUTO_TARGETS = frozenset({
     TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO,
 })
@@ -41,21 +37,17 @@ class AttenuationPathsMixin:
             hits.append(int(v.index))
         return hits
 
-    def resolve_vertex(
-        self,
-        ref,
-    ) -> Optional[int]:
-        """Interface / (type,id,side,port) / int → индекс вершины."""
+    def resolve_vertex(self, ref) -> Optional[int]:
+        """Interface / (type,id,side,port) / int / 'type:id' → индекс вершины."""
         if isinstance(ref, int):
             return ref
         if self.g is None:
             return None
-        # Interface
         if hasattr(ref, "obj") and hasattr(ref, "side"):
             ot = ref.obj.obj_type
             oid = ref.obj.id
-            return self.find_vertices(ot, oid, side=ref.side, port=ref.port)[0:1] and \
-                self.find_vertices(ot, oid, side=ref.side, port=ref.port)[0] or None
+            hits = self.find_vertices(ot, oid, side=ref.side, port=getattr(ref, "port", None))
+            return hits[0] if hits else None
         if isinstance(ref, (tuple, list)) and len(ref) >= 2:
             ot, oid = ref[0], ref[1]
             side = ref[2] if len(ref) > 2 else None
@@ -111,7 +103,6 @@ class AttenuationPathsMixin:
         """Все простые пути между объектами (или от obj1 до авто-терминалов).
 
         Если obj2 не задан — ищем пути до OLT/switch/onu/radio в текущем CGraph.
-        При нескольких вершинах-кандидатах собираем пути по всем парам.
         """
         if self.g is None:
             raise AttenuationError("CGraph не задан")
@@ -148,21 +139,18 @@ class AttenuationPathsMixin:
                     f"для пути от {obj1_type}:{obj1_id}"
                 )
 
-        # однозначная пара — кратчайший + все простые
         collected: List[List[int]] = []
         seen = set()
         for s in sources:
             for t in targets:
                 if s == t:
                     continue
-                # сначала кратчайший
                 sp = self.shortest_path(s, t)
                 if sp and len(sp) >= 2:
                     key = tuple(sp)
                     if key not in seen:
                         seen.add(key)
                         collected.append(sp)
-                # остальные простые (ветвление)
                 for p in self.all_simple_paths(s, t, cutoff=cutoff, max_paths=max_paths):
                     if len(p) < 2:
                         continue
@@ -185,7 +173,6 @@ class AttenuationPathsMixin:
         exclude_type: Optional[str] = None,
         exclude_id=None,
     ) -> List[int]:
-        """Вершины-терминалы в графе (OLT/switch/…), кроме exclude."""
         if self.g is None:
             return []
         out: List[int] = []

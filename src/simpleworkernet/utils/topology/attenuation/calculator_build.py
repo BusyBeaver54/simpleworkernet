@@ -4,22 +4,30 @@ from __future__ import annotations
 from typing import Any, Optional, Union
 from .errors import AttenuationError
 
+
 class AttenuationBuildMixin:
     def _ensure_cgraph(
-        self, obj1_type, obj1_id, obj2_type, obj2_id,
+        self, obj1_type, obj1_id, obj2_type=None, obj2_id=None,
         *, obj1_side=None, obj1_port=None, obj2_side=None, obj2_port=None,
     ) -> None:
         def has_obj(g, otype, oid) -> bool:
-            if g is None:
+            if g is None or otype is None or oid is None:
                 return False
             for v in g.vs:
                 if v["obj_type"] == otype and str(v["obj_id"]) == str(oid):
                     return True
             return False
 
-        need_build = self.g is None or not (
-            has_obj(self.g, obj1_type, obj1_id) and has_obj(self.g, obj2_type, obj2_id)
-        )
+        has_b = obj2_type is not None and obj2_id is not None and obj2_id != ""
+
+        if has_b:
+            need_build = self.g is None or not (
+                has_obj(self.g, obj1_type, obj1_id)
+                and has_obj(self.g, obj2_type, obj2_id)
+            )
+        else:
+            need_build = self.g is None or not has_obj(self.g, obj1_type, obj1_id)
+
         if not need_build:
             return
         if self.client is None:
@@ -30,10 +38,12 @@ class AttenuationBuildMixin:
         from ..constants import TYPE_FIBER
         from .calculator_pairs import pair_plan
 
-        plan = pair_plan(obj1_type, obj2_type)
+        plan = pair_plan(obj1_type, obj2_type if has_b else None)
 
-        if plan.strategy == "fn_corridor" or (
-            obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER
+        # fiber↔fiber corridor
+        if has_b and (
+            plan.strategy == "fn_corridor"
+            or (obj1_type == TYPE_FIBER and obj2_type == TYPE_FIBER)
         ):
             cg = self._build_cgraph_via_fngraph(
                 int(obj1_id), int(obj2_id),
@@ -45,6 +55,18 @@ class AttenuationBuildMixin:
             ):
                 self.g = cg
                 return
+
+        # только obj1 — строим от него
+        if not has_b:
+            g = self._build_cgraph_from(
+                obj1_type, obj1_id, side=obj1_side, port=obj1_port,
+            )
+            if g is None or not has_obj(g, obj1_type, obj1_id):
+                raise AttenuationError(
+                    f"не удалось построить CGraph от {obj1_type}:{obj1_id}"
+                )
+            self.g = g
+            return
 
         if plan.strategy == "from_b":
             order = [
@@ -64,6 +86,8 @@ class AttenuationBuildMixin:
 
         built = {}
         for key, ot, oid, side, port in order:
+            if ot is None or oid is None:
+                continue
             g = self._build_cgraph_from(ot, oid, side=side, port=port)
             built[key] = g
             if g is not None and has_obj(g, obj1_type, obj1_id) and has_obj(
@@ -95,13 +119,14 @@ class AttenuationBuildMixin:
 
         if self.g is None:
             raise AttenuationError(
-                f"не удалось построить CGraph для {obj1_type}:{obj1_id} / {obj2_type}:{obj2_id}"
+                f"не удалось построить CGraph для {obj1_type}:{obj1_id}"
+                + (f" / {obj2_type}:{obj2_id}" if has_b else "")
             )
         if not has_obj(self.g, obj1_type, obj1_id):
             raise AttenuationError(
                 f"объект не найден в графе после построения: {obj1_type}:{obj1_id}"
             )
-        if not has_obj(self.g, obj2_type, obj2_id):
+        if has_b and not has_obj(self.g, obj2_type, obj2_id):
             raise AttenuationError(
                 f"объект не найден в графе после построения: {obj2_type}:{obj2_id}"
             )
