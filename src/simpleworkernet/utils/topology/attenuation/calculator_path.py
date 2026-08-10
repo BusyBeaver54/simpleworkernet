@@ -19,7 +19,7 @@ class AttenuationPathMixin:
         if hasattr(self, "_resolve_cable_name"):
             cable_name = self._resolve_cable_name(fiber_vertex_attrs)
         if not cable_name:
-            cable_name = _cable_name(fiber_vertex_attrs) or fiber_vertex_attrs.get("cable_name")
+            cable_name = _cable_name(fiber_vertex_attrs)
 
         if length_m is None and self.cache is not None and self.client is not None:
             try:
@@ -38,7 +38,6 @@ class AttenuationPathMixin:
             use_max=self.use_max,
         )
         src = "default"
-        # предпочтительно по имени кабеля
         try:
             if cable_name and hasattr(self.catalog, "cable_db_per_km"):
                 db_km = self.catalog.cable_db_per_km(
@@ -120,6 +119,7 @@ class AttenuationPathMixin:
         port = int(splitter_vertex_attrs.get("port") or 0)
         splitter_obj = splitter_vertex_attrs.get("api_obj")
         catalog_id = self._splitter_catalog_id(splitter_obj)
+
         pout = None
         if splitter_obj is not None:
             pout = (
@@ -127,6 +127,7 @@ class AttenuationPathMixin:
                 if not isinstance(splitter_obj, dict)
                 else splitter_obj.get("port_count_out")
             )
+
         topology = None
         if splitter_obj is not None:
             if isinstance(splitter_obj, dict):
@@ -139,12 +140,12 @@ class AttenuationPathMixin:
         if not topology:
             topology = splitter_vertex_attrs.get("splitter_type")
 
-        name = _obj_display_name(splitter_vertex_attrs)
-        if not name and splitter_obj is not None:
-            if isinstance(splitter_obj, dict):
-                name = splitter_obj.get("name") or splitter_obj.get("title")
-            else:
-                name = getattr(splitter_obj, "name", None) or getattr(splitter_obj, "title", None)
+        # имя только из модели / inventory
+        name = None
+        if hasattr(self, "_resolve_splitter_name"):
+            name = self._resolve_splitter_name(splitter_vertex_attrs)
+        if not name:
+            name = _obj_display_name(splitter_vertex_attrs)
 
         port_name = self._splitter_port_name(splitter_obj, port)
         if not port_name:
