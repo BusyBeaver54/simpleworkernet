@@ -1,6 +1,593 @@
-import zlib,base64 as B
-_D='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'
-_s=zlib.decompress(B.b64decode(_D)).decode()
-_g=globals()
-_g["__package__"]=__package__ or "simpleworkernet.core"
-exec(compile(_s,__file__,"exec"),_g)
+"""
+Менеджер конфигурации для SimpleWorkerNet
+Синглтон для текущего процесса, использует имя текущего приложения
+"""
+import os
+import sys
+import json
+from pathlib import Path
+from typing import Optional, Dict, Any, Union, Literal, List
+from dataclasses import dataclass, field, asdict
+
+from ..utils.app_name import get_app_name
+
+
+# Типы для конфигурации
+CacheEvictStrategy = Literal['lru', 'lfu', 'fifo']
+
+
+def get_app_config_dir(app_name: str) -> Path:
+    """Возвращает директорию конфигурации для приложения"""
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
+    elif sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Application Support'
+    else:
+        base = Path.home() / '.config'
+    return base / 'simpleworkernet' / app_name
+
+
+def get_app_cache_dir(app_name: str) -> Path:
+    """Возвращает директорию кэша для приложения"""
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
+    elif sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Caches'
+    else:
+        base = Path.home() / '.cache'
+    return base / 'simpleworkernet' / app_name
+
+
+def get_app_logs_dir(app_name: str) -> Path:
+    """Возвращает директорию логов для приложения (legacy, для cleanup старых файлов)."""
+    if sys.platform == 'win32':
+        base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
+    elif sys.platform == 'darwin':
+        base = Path.home() / 'Library' / 'Logs'
+    else:
+        base = Path.home() / '.local' / 'share'
+    return base / 'simpleworkernet' / app_name / 'logs'
+
+
+@dataclass
+class CacheConfig:
+    """Конфигурация кэша для SmartDataCache"""
+    enabled: bool = True
+    max_size: int = 200000
+    evict_strategy: CacheEvictStrategy = 'lru'
+    evict_threshold: float = 0.95                 # порог заполнения
+    evict_percent: float = 0.25                   # доля удаляемых записей
+    auto_save: bool = True
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'enabled': self.enabled,
+            'max_size': self.max_size,
+            'evict_strategy': self.evict_strategy,
+            'evict_threshold': self.evict_threshold,
+            'evict_percent': self.evict_percent,
+            'auto_save': self.auto_save,
+        }
+
+
+def _default_preload_types() -> List[str]:
+    return ["node", "device", "splitter", "cross", "cwdm", "fiber"]
+
+
+@dataclass
+class WorkerNetConfig:
+    """Конфигурация для текущего приложения.
+
+    Настройки topology/attenuation — плоские поля здесь же
+    (доступ через ConfigManager), без отдельных классов.
+    """
+
+    # Настройки кэша
+    cache: CacheConfig = field(default_factory=CacheConfig)
+
+    # Настройки API
+    default_timeout: int = 30
+    max_retries: int = 3
+    user_agent: str = "SimpleWorkerNet/1.0"
+
+    # Настройки SmartData
+    smartdata_max_depth: int = 100
+
+    # --- Topology / DataCache ---
+    # Таймаут HTTP для массовых get_all_* (сек). Абоненты грузятся долго.
+    bulk_timeout: int = 120
+    customer_list_timeout: int = 300
+    # Фоновая предзагрузка get_all_* при DataCache(client) / NetworkTopology
+    preload_on_init: bool = True
+    preload_types: List[str] = field(default_factory=_default_preload_types)
+    preload_customers: bool = False
+    # Параллельные фоновые задачи (потоки; объекты API не сериализуются в процессы)
+    preload_workers: int = 6
+
+    # --- Attenuation ---
+    # Каталог JSON: если None — ~/.config/simpleworkernet/
+    attenuation_json_dir: Optional[str] = None
+    # Шаблон имени файла; {host} → hostname клиента
+    attenuation_json_filename: str = "attenuation_{host}.json"
+    attenuation_default_wavelength: int = 1550
+    attenuation_use_max_default: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkerNetConfig":
+        # неизвестные/устаревшие ключи игнорируются;
+        # legacy вложенные topology/attenuation распаковываются в плоские поля
+        valid_keys = set(cls.__annotations__.keys())
+        filtered: Dict[str, Any] = {}
+
+        # legacy: {"topology": {...}, "attenuation": {...}}
+        topo = data.get("topology") if isinstance(data.get("topology"), dict) else {}
+        att = data.get("attenuation") if isinstance(data.get("attenuation"), dict) else {}
+        legacy_map = {
+            "bulk_timeout": topo.get("bulk_timeout"),
+            "customer_list_timeout": topo.get("customer_list_timeout"),
+            "preload_on_init": topo.get("preload_on_init"),
+            "preload_types": topo.get("preload_types"),
+            "preload_customers": topo.get("preload_customers"),
+            "preload_workers": topo.get("preload_workers"),
+            "attenuation_json_dir": att.get("json_dir"),
+            "attenuation_json_filename": att.get("json_filename"),
+            "attenuation_default_wavelength": att.get("default_wavelength"),
+            "attenuation_use_max_default": att.get("use_max_default"),
+        }
+        for k, v in legacy_map.items():
+            if v is not None and k not in data:
+                data = {**data, k: v}
+
+        for k, v in data.items():
+            if k not in valid_keys:
+                continue
+            if k == "cache" and isinstance(v, dict):
+                filtered[k] = CacheConfig(**{
+                    kk: vv for kk, vv in v.items()
+                    if kk in CacheConfig.__annotations__
+                })
+            else:
+                filtered[k] = v
+        return cls(**filtered)
+
+
+class ConfigManager:
+    """
+    Менеджер конфигурации - синглтон для текущего процесса.
+    Изменения настроек применяются immediately к текущей сессии.
+    Сохранение в файл происходит только при вызове save().
+    """
+
+    _instance: Optional['ConfigManager'] = None
+    _initialized: bool = False
+
+    def __new__(cls) -> 'ConfigManager':
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+
+        # Определяем имя текущего приложения
+        self.app_name = get_app_name(with_hash=True)
+        self.display_name = get_app_name(with_hash=False)
+
+        # Пути для текущего приложения
+        self.config_dir = get_app_config_dir(self.app_name)
+        self.config_file = self.config_dir / 'config.json'
+        self.cache_dir = get_app_cache_dir(self.app_name)
+        self.logs_dir = get_app_logs_dir(self.app_name)
+
+        # Создаём директории если нужно (логи больше не пишем — logs_dir только для cleanup legacy)
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Загружаем конфигурацию из файла
+        self._config = self._load()
+
+        # Ленивые ссылки на компоненты
+        self._logger = None
+        self._cache = None
+
+        self._initialized = True
+
+    def _get_logger(self):
+        """Ленивый импорт логгера"""
+        if self._logger is None:
+            from .logger import log
+            self._logger = log
+        return self._logger
+
+    def _get_cache(self):
+        """Ленивый импорт кэша"""
+        if self._cache is None:
+            from .cache import cache
+            self._cache = cache
+        return self._cache
+
+    def _load(self) -> WorkerNetConfig:
+        """Загружает конфигурацию из файла"""
+        config_data = {}
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+            except Exception as e:
+                print(f"Предупреждение: не удалось загрузить конфигурацию: {e}")
+        return WorkerNetConfig.from_dict(config_data)
+
+    def _save(self):
+        """Сохраняет конфигурацию в файл"""
+        try:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(self._config.to_dict(), f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger = self._get_logger()
+            logger.error(f"Ошибка сохранения конфигурации: {e}")
+
+    # ==================== Свойства для прямого доступа к настройкам ====================
+
+    # --- Свойства кэша ---
+
+    @property
+    def cache_enabled(self) -> bool:
+        return self._config.cache.enabled
+
+    @cache_enabled.setter
+    def cache_enabled(self, value: bool):
+        self._config.cache.enabled = value
+        cache = self._get_cache()
+        cache._apply_config()  # применить изменения к локальным атрибутам кэша
+        if value:
+            cache.enable()
+        else:
+            cache.disable()
+
+    @property
+    def cache_max_size(self) -> int:
+        return self._config.cache.max_size
+
+    @cache_max_size.setter
+    def cache_max_size(self, value: int):
+        self._config.cache.max_size = value
+        cache = self._get_cache()
+        cache._apply_config()
+        self._get_logger().info(f"Максимальный размер кэша изменён на {value}")
+
+    @property
+    def cache_auto_save(self) -> bool:
+        return self._config.cache.auto_save
+
+    @cache_auto_save.setter
+    def cache_auto_save(self, value: bool):
+        self._config.cache.auto_save = value
+        cache = self._get_cache()
+        cache._apply_config()
+        self._get_logger().info(f"Автосохранение кэша: {'включено' if value else 'отключено'}")
+
+    @property
+    def cache_evict_strategy(self) -> str:
+        return self._config.cache.evict_strategy
+
+    @cache_evict_strategy.setter
+    def cache_evict_strategy(self, value: str):
+        if self._config.cache.evict_strategy != value:
+            self._config.cache.evict_strategy = value
+            self._get_logger().info(f"Стратегия очистки кэша изменена на {value}")
+
+    @property
+    def cache_evict_threshold(self) -> float:
+        return self._config.cache.evict_threshold
+
+    @cache_evict_threshold.setter
+    def cache_evict_threshold(self, value: float):
+        self._config.cache.evict_threshold = value
+        cache = self._get_cache()
+        cache._apply_config()
+        self._get_logger().info(f"Порог очистки кэша изменён на {value}")
+
+    @property
+    def cache_evict_percent(self) -> float:
+        return self._config.cache.evict_percent
+
+    @cache_evict_percent.setter
+    def cache_evict_percent(self, value: float):
+        self._config.cache.evict_percent = value
+        cache = self._get_cache()
+        cache._apply_config()
+        self._get_logger().info(f"Процент удаляемых записей кэша изменён на {value}")
+
+    # --- API ---
+
+    @property
+    def default_timeout(self) -> int:
+        return self._config.default_timeout
+
+    @default_timeout.setter
+    def default_timeout(self, value: int):
+        self._config.default_timeout = value
+        self._get_logger().info(f"Таймаут клиента изменён на {value}")
+
+    @property
+    def max_retries(self) -> int:
+        return self._config.max_retries
+
+    @max_retries.setter
+    def max_retries(self, value: int):
+        self._config.max_retries = value
+        self._get_logger().info(f"Максимальное количество повторов изменено на {value}")
+
+    @property
+    def user_agent(self) -> str:
+        return self._config.user_agent
+
+    @user_agent.setter
+    def user_agent(self, value: str):
+        self._config.user_agent = value
+        self._get_logger().info(f"User-Agent изменён на {value}")
+
+    @property
+    def smartdata_max_depth(self) -> int:
+        return self._config.smartdata_max_depth
+
+    @smartdata_max_depth.setter
+    def smartdata_max_depth(self, value: int):
+        self._config.smartdata_max_depth = value
+        self._get_logger().info(f"Максимальная глубина SmartData изменена на {value}")
+
+    # --- Topology / DataCache (плоские свойства) ---
+
+    @property
+    def bulk_timeout(self) -> int:
+        return self._config.bulk_timeout
+
+    @bulk_timeout.setter
+    def bulk_timeout(self, value: int):
+        self._config.bulk_timeout = int(value)
+
+    @property
+    def customer_list_timeout(self) -> int:
+        return self._config.customer_list_timeout
+
+    @customer_list_timeout.setter
+    def customer_list_timeout(self, value: int):
+        self._config.customer_list_timeout = int(value)
+
+    @property
+    def preload_on_init(self) -> bool:
+        return self._config.preload_on_init
+
+    @preload_on_init.setter
+    def preload_on_init(self, value: bool):
+        self._config.preload_on_init = bool(value)
+
+    @property
+    def preload_types(self) -> List[str]:
+        return list(self._config.preload_types)
+
+    @preload_types.setter
+    def preload_types(self, value: List[str]):
+        self._config.preload_types = list(value)
+
+    @property
+    def preload_customers(self) -> bool:
+        return self._config.preload_customers
+
+    @preload_customers.setter
+    def preload_customers(self, value: bool):
+        self._config.preload_customers = bool(value)
+
+    @property
+    def preload_workers(self) -> int:
+        return self._config.preload_workers
+
+    @preload_workers.setter
+    def preload_workers(self, value: int):
+        self._config.preload_workers = int(value)
+
+    # --- Attenuation (плоские свойства) ---
+
+    @property
+    def attenuation_json_dir(self) -> Optional[str]:
+        return self._config.attenuation_json_dir
+
+    @attenuation_json_dir.setter
+    def attenuation_json_dir(self, value: Optional[str]):
+        self._config.attenuation_json_dir = value
+
+    @property
+    def attenuation_json_filename(self) -> str:
+        return self._config.attenuation_json_filename
+
+    @attenuation_json_filename.setter
+    def attenuation_json_filename(self, value: str):
+        self._config.attenuation_json_filename = str(value)
+
+    @property
+    def attenuation_default_wavelength(self) -> int:
+        return self._config.attenuation_default_wavelength
+
+    @attenuation_default_wavelength.setter
+    def attenuation_default_wavelength(self, value: int):
+        self._config.attenuation_default_wavelength = int(value)
+
+    @property
+    def attenuation_use_max_default(self) -> bool:
+        return self._config.attenuation_use_max_default
+
+    @attenuation_use_max_default.setter
+    def attenuation_use_max_default(self, value: bool):
+        self._config.attenuation_use_max_default = bool(value)
+
+    def attenuation_json_path(self, host: str = "default") -> Path:
+        """Путь к attenuation_<host>.json (через config)."""
+        if self._config.attenuation_json_dir:
+            base = Path(self._config.attenuation_json_dir)
+        else:
+            if sys.platform == "win32":
+                base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+            elif sys.platform == "darwin":
+                base = Path.home() / "Library" / "Application Support"
+            else:
+                base = Path.home() / ".config"
+            base = base / "simpleworkernet"
+        base.mkdir(parents=True, exist_ok=True)
+        name = self._config.attenuation_json_filename.replace(
+            "{host}", str(host or "default")
+        )
+        return base / name
+
+    # ==================== Основные методы ====================
+
+    def get(self) -> WorkerNetConfig:
+        """Возвращает текущую конфигурацию"""
+        return self._config
+
+    def save(self) -> bool:
+        """Сохраняет текущую конфигурацию в файл"""
+        try:
+            self._save()
+            self._get_logger().info(f"Конфигурация сохранена в {self.config_file}")
+            return True
+        except Exception as e:
+            self._get_logger().error(f"Ошибка сохранения конфигурации: {e}")
+            return False
+
+    def reset(self, save: bool = False) -> 'ConfigManager':
+        """Сбрасывает конфигурацию на значения по умолчанию."""
+        self._config = WorkerNetConfig()
+        self._apply_all_changes()
+        if save:
+            self.save()
+        else:
+            self._get_logger().info("Конфигурация сброшена на значения по умолчанию (не сохранено)")
+        return self
+
+    def _apply_changes(self, old: WorkerNetConfig, new: WorkerNetConfig):
+        """Применяет изменения конфигурации к компонентам"""
+        # Кэш – обновляем локальные копии
+        if old.cache != new.cache:
+            cache = self._get_cache()
+            cache._apply_config()
+
+    def _apply_all_changes(self):
+        """Применяет все текущие настройки к компонентам"""
+        cache = self._get_cache()
+        cache._apply_config()
+        self._get_logger().debug("Все настройки применены к компонентам")
+
+    # ==================== Методы для компонентов ====================
+
+    def get_cache_config(self) -> Dict[str, Any]:
+        """Возвращает настройки для кэша в виде словаря"""
+        cfg = self._config.cache
+        return {
+            'enabled': cfg.enabled,
+            'max_size': cfg.max_size,
+            'evict_threshold': cfg.evict_threshold,
+            'evict_percent': cfg.evict_percent,
+            'auto_save': cfg.auto_save,
+            'cache_dir': str(self.cache_dir),
+            'evict_strategy': cfg.evict_strategy,
+        }
+
+    def get_client_config(self) -> Dict[str, Any]:
+        return {
+            'timeout': self._config.default_timeout,
+            'max_retries': self._config.max_retries,
+            'user_agent': self._config.user_agent,
+        }
+
+    def get_smartdata_config(self) -> Dict[str, Any]:
+        return {
+            'max_depth': self._config.smartdata_max_depth,
+        }
+
+    def show_config(self, return_string: bool = False) -> Optional[str]:
+        """Показывает текущую конфигурацию."""
+        config_dict = self._config.to_dict()
+        cache_cfg = config_dict.get('cache', {})
+        lines = [
+            "=" * 60,
+            f"КОНФИГУРАЦИЯ SIMPLEWORKERNET - {self.display_name}",
+            "=" * 60,
+            f"Приложение: {self.app_name}",
+            f"Файл конфигурации: {self.config_file}",
+            f"Директория кэша: {self.cache_dir}",
+            f"Директория логов (legacy): {self.logs_dir}",
+            "-" * 60,
+            "КЭШ:",
+            f"  Включён: {cache_cfg.get('enabled', False)}",
+            f"  Макс. размер: {cache_cfg.get('max_size', 50000)}",
+            f"  Стратегия: {cache_cfg.get('evict_strategy', 'lru')}",
+            f"  Порог очистки: {cache_cfg.get('evict_threshold', 0.9)}",
+            f"  Процент удаления: {cache_cfg.get('evict_percent', 0.2)}",
+            f"  Автосохранение: {cache_cfg.get('auto_save', True)}",
+            "-" * 60,
+            "API КЛИЕНТ:",
+            f"  Таймаут: {config_dict['default_timeout']}с",
+            f"  Повторы: {config_dict['max_retries']}",
+            f"  User-Agent: {config_dict['user_agent']}",
+            "-" * 60,
+            "SMARTDATA:",
+            f"  Макс. глубина: {config_dict['smartdata_max_depth']}",
+            "-" * 60,
+            "TOPOLOGY / DATACACHE:",
+            f"  bulk_timeout: {config_dict.get('bulk_timeout')}с",
+            f"  customer_list_timeout: {config_dict.get('customer_list_timeout')}с",
+            f"  preload_on_init: {config_dict.get('preload_on_init')}",
+            f"  preload_types: {config_dict.get('preload_types')}",
+            f"  preload_customers: {config_dict.get('preload_customers')}",
+            f"  preload_workers: {config_dict.get('preload_workers')}",
+            "-" * 60,
+            "ATTENUATION:",
+            f"  json_dir: {config_dict.get('attenuation_json_dir') or '(default XDG)'}",
+            f"  json_filename: {config_dict.get('attenuation_json_filename')}",
+            f"  default_wavelength: {config_dict.get('attenuation_default_wavelength')}",
+            f"  use_max_default: {config_dict.get('attenuation_use_max_default')}",
+            "=" * 60,
+        ]
+        result = "\n".join(lines)
+        if return_string:
+            return result
+        logger = self._get_logger()
+        for line in lines:
+            logger.info(line)
+        return None
+
+    def update(self, save: bool = False, **kwargs) -> 'ConfigManager':
+        """Массовое обновление настроек."""
+        old_config = WorkerNetConfig.from_dict(self._config.to_dict())
+        changed = False
+
+        for key, value in kwargs.items():
+            if key == 'cache':
+                # Если передают словарь для кэша
+                if isinstance(value, dict):
+                    for ck, cv in value.items():
+                        if hasattr(self._config.cache, ck):
+                            old_val = getattr(self._config.cache, ck)
+                            if old_val != cv:
+                                setattr(self._config.cache, ck, cv)
+                                changed = True
+            elif hasattr(self._config, key):
+                old_value = getattr(self._config, key)
+                if old_value != value:
+                    setattr(self._config, key, value)
+                    changed = True
+
+        if changed:
+            self._apply_changes(old_config, self._config)
+
+        if save:
+            self.save()
+
+        return self
+
+
+config_manager = ConfigManager()
