@@ -32,7 +32,6 @@ class AttenuationPathMixin:
                 except Exception:
                     length_m, length_source = None, "missing"
 
-        # fiber_db_per_km возвращает float, не кортеж
         db_km = self.catalog.fiber_db_per_km(
             wavelength_nm=self.wavelength,
             use_max=self.use_max,
@@ -79,6 +78,7 @@ class AttenuationPathMixin:
         ]
 
     def _splitter_port_name(self, splitter_obj, port: int) -> Optional[str]:
+        """Имя порта из модели сплиттера (API), если есть."""
         if splitter_obj is None or not port:
             return None
         for attr in ("ports", "port_list", "ifaces", "out_ports"):
@@ -140,13 +140,13 @@ class AttenuationPathMixin:
         if not topology:
             topology = splitter_vertex_attrs.get("splitter_type")
 
-        # имя только из модели / inventory
         name = None
         if hasattr(self, "_resolve_splitter_name"):
             name = self._resolve_splitter_name(splitter_vertex_attrs)
         if not name:
             name = _obj_display_name(splitter_vertex_attrs)
 
+        # имя порта: сначала API, затем JSON-каталог (через splitter_port_db)
         port_name = self._splitter_port_name(splitter_obj, port)
         if not port_name:
             port_name = splitter_vertex_attrs.get("port_name")
@@ -156,7 +156,7 @@ class AttenuationPathMixin:
             from .catalog_helpers import guess_ratio_key
             ratio_key = guess_ratio_key(str(name))
 
-        db, source = self.catalog.splitter_port_db(
+        result = self.catalog.splitter_port_db(
             splitter_id=splitter_id,
             catalog_id=catalog_id,
             catalog_name=name,
@@ -169,6 +169,16 @@ class AttenuationPathMixin:
             use_max=self.use_max,
             prefer_name=True,
         )
+        # (db, source) или (db, source, port_name)
+        if len(result) == 3:
+            db, source, cat_port_name = result
+        else:
+            db, source = result[0], result[1]
+            cat_port_name = None
+
+        # JSON-каталог имеет приоритет для отображаемого имени порта
+        if cat_port_name:
+            port_name = cat_port_name
 
         port_label = str(port) if port else "?"
         if port_name:
