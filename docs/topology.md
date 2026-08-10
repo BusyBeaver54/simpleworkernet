@@ -1,6 +1,7 @@
 # Графовая топология
 
-**Зависимость:** `pip install python-igraph`
+**Зависимость:** `pip install python-igraph`  
+(или `pip install "simpleworkernet[topology]"`)
 
 Модуль: `simpleworkernet.utils.topology`.
 
@@ -13,12 +14,12 @@ from simpleworkernet.utils.topology import (
     TopologyBuildError,
     TYPE_OLT, TYPE_FIBER, TYPE_SPLITTER, TYPE_CROSS,
     TYPE_CUSTOMER, TYPE_CWDM, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO,
-    Attenuation, PathReport, MultiPathReport,
+    DEVICE_TYPES, SIDE_TYPES, TERMINAL_TYPES, ALL_OBJECT_TYPES,
+    Attenuation, PathReport, MultiPathReport, AttenuationSegment,
 )
-from simpleworkernet.utils.constants import ALL_OBJECT_TYPES, TERMINAL_TYPES
 ```
 
-Класс оркестратора — **`NetworkTopology`** (устаревшее имя `Topology` удалено).
+Оркестратор — **`NetworkTopology`** (устаревшее имя `Topology` **удалено**).
 
 ---
 
@@ -29,9 +30,26 @@ from simpleworkernet.utils.constants import ALL_OBJECT_TYPES, TERMINAL_TYPES
 | **CGraph** | Интерфейсы `(obj_type, obj_id, side, port)` | Коммутации (в т.ч. внутренние на кроссе/сплиттере) |
 | **FNGraph** | Сооружения (`node_id`) | Кабели между узлами |
 
-`NetworkTopology` хранит список `cgraphs: List[CGraph]` и опционально один `fngraph`.
+`NetworkTopology` хранит:
 
-Константы типов — в `simpleworkernet.utils.constants` (и реэкспорт из `topology`).
+- `cgraphs: List[CGraph]` — одна или несколько связных компонент коммутации;
+- `fngraph: Optional[FNGraph]` — обобщённый граф сооружений;
+- `client`, `cache: DataCache`.
+
+Несвязный CGraph **не** добавляется в список (проверка `is_connected()`).
+
+Константы типов — в `simpleworkernet.utils.constants` и реэкспорт из `topology`.
+
+### Ключи и интерфейсы
+
+```python
+from simpleworkernet.utils.topology import ObjKey, Interface
+
+key = ObjKey("olt", 11808)
+iface = Interface("fiber", 13259, side=2, port=1)
+```
+
+Вершина CGraph: атрибуты `obj_type`, `obj_id`, `side`, `port`, часто `api_obj`.
 
 ---
 
@@ -81,7 +99,7 @@ nt.build_from_cross(uuid, port="1-12", side=1)
 
 ## 4. Построение по типам объектов
 
-Общая идея: BFS по коммутациям от стартового интерфейса.
+Общая идея: BFS по коммутациям от стартового интерфейса (`builders/`).
 
 | Встреченный объект | Поведение |
 |--------------------|-----------|
@@ -91,7 +109,7 @@ nt.build_from_cross(uuid, port="1-12", side=1)
 | **OLT / switch / onu / radio / customer** | терминал — обход останавливается |
 | **Fiber** | ребро вдоль кабеля (side1 ↔ side2) |
 
-Фильтры (все методы):
+Фильтры (где поддерживаются):
 
 - `included_fibers` — только эти id кабелей;
 - `excluded_fibers` — не заходить в эти кабели;
@@ -124,34 +142,29 @@ nt.build_from_cross(cross_uuid, side=1, port="1-12")
 nt.build_from_cross(cross_uuid)  # все порты / обе стороны по коммутациям
 ```
 
-- `side` задан — строим в **противоположную** сторону кросса.
-- `side=None` — обе стороны.
-- `port` — один / список / диапазон / строка.
-
 ### 4.4. Сплиттер / CWDM
 
 ```python
 nt.build_from_splitter(16926, side=2, port=(1, 8))
-nt.build_from_splitter(16926)  # все интерфейсы из коммутаций → merge
+nt.build_from_splitter(16926)
 nt.build_from_cwdm(7, side=1, port=2)
 ```
 
 ### 4.5. Кабель (fiber)
 
 ```python
-nt.build_from_fiber(13259, side=2, port=1)  # port = номер оптического волокна
+nt.build_from_fiber(13259, side=2, port=1)  # port = номер ОВ
 ```
 
 Для однозначного линейного графа **нужен номер ОВ** (`port`).  
 `side` — сторона сооружения (node1 / node2).
 
-### 4.6. Сооружение (node)
+### 4.6. Сооружение (node) / кабель
 
 ```python
 nt.build_from_node(node_id)
+nt.build_from_cable(cable_id)
 ```
-
-Обход по всем коммутациям в сооружении.
 
 ### 4.7. Низкоуровневый CGraph.build
 
@@ -161,12 +174,10 @@ from simpleworkernet.utils.topology import CGraph, DataCache
 cg = CGraph(client, cache=DataCache())
 cg.build(
     object_type, object_id,
-    port=None,
-    side=None,
+    port=None, side=None,
     included_fibers=None,
     excluded_fibers=None,
     excluded_nodes=None,
-    # linear / linear_on_fail — если поддерживается builders
 )
 print(cg.vcount(), cg.ecount(), cg.is_connected())
 ```
@@ -179,14 +190,12 @@ print(cg.vcount(), cg.ecount(), cg.is_connected())
 
 ```python
 nt.build_from_device("olt", 10, port=1, linear=True, linear_on_fail="raise")
-# linear_on_fail: "raise" | "continue" (поведение при невозможности линейного пути)
+# linear_on_fail: "raise" | "continue"
 
 cg = nt.cgraphs[0]
 if hasattr(cg, "is_linear"):
     print(cg.is_linear())
 ```
-
-Типичные линейные участки: абонент ↔ выход сплиттера; или путь без сплиттеров.
 
 ---
 
@@ -195,13 +204,9 @@ if hasattr(cg, "is_linear"):
 Из **уже построенной** топологии:
 
 ```python
-# customer → olt
 linear = nt.get_linear("customer", 17711, "olt", 11808)
+linear = nt.get_linear("customer", 17711)  # если путь однозначен
 
-# только старт — до конца коммутации, если путь однозначен
-linear = nt.get_linear("customer", 17711)
-
-# из FNGraph по node_id
 linear = nt.get_linear(
     "node", 10,
     source="fngraph",
@@ -209,8 +214,6 @@ linear = nt.get_linear(
     end_node_id=20,
 )
 ```
-
-Параметры:
 
 | Параметр | Смысл |
 |----------|--------|
@@ -230,14 +233,8 @@ linear = nt.get_linear(
 from simpleworkernet.utils.topology.paths import simple_paths, shortest_simple_path
 
 cg = nt.cgraphs[0]
-v_from, v_to = 0, cg.vcount() - 1
-
 paths = simple_paths(cg, v_from, v_to, cutoff=100, max_paths=50)
 shortest = shortest_simple_path(cg, v_from, v_to)
-
-# если обёртки есть на графе:
-# cg.simple_paths(v_from, v_to)
-# cg.shortest_path(v_from, v_to)
 ```
 
 Алгоритм — итеративный DFS без повторов вершин, с `cutoff` и `max_paths`.
@@ -269,11 +266,11 @@ shortest = shortest_simple_path(cg, v_from, v_to)
 from simpleworkernet.utils.topology import DataCache, merge_cgraphs, merge_fngraphs
 
 cache = DataCache()
-# кэш коммутаций, fiber, splitter, device — общий для topology и attenuation
-
 cg = merge_cgraphs([cg1, cg2], client, cache)
 fn = merge_fngraphs([fn1, fn2], client, cache)
 ```
+
+`DataCache` общий для topology и attenuation — меньше запросов к API.
 
 ---
 
@@ -294,12 +291,12 @@ print("сплиттеры:", nt.get_splitters())
 nt = NetworkTopology(client)
 nt.build_from_customer(17711)
 
-from simpleworkernet.utils.topology.attenuation import Attenuation
-att = Attenuation(cgraph=nt.cgraphs[0], client=client, cache=nt.cache, wavelength=1490)
-res = att.calculate()  # весь граф
-# или
+from simpleworkernet.utils.topology import Attenuation
+att = Attenuation(topology=nt, wavelength=1490)
+res = att.calculate()  # все cgraph топологии
 res = att.calculate("customer", 17711, "olt", 11808, wavelength=1490)
 print(res.to_table())
+print(res.total_db, res.total_db_min, res.total_db_max)
 ```
 
 ### Линейный участок fiber ↔ fiber
@@ -309,21 +306,23 @@ nt = NetworkTopology(client)
 nt.build_from_fiber(13259, side=2, port=1)
 
 linear = nt.get_linear("fiber", 13259, "fiber", 13235, port=1)
-att = Attenuation(cgraph=linear.cgraphs[0], client=client, wavelength=1490)
+att = Attenuation(topology=linear, wavelength=1490)
 res = att.calculate(
     "fiber", 13259, "fiber", 13235,
     obj1_side=2, obj1_port=1, obj2_side=2, obj2_port=1,
 )
 ```
 
-### Несколько портов OLT → несколько CGraph / merge
+### Несколько портов OLT → несколько CGraph
 
 ```python
 nt = NetworkTopology(client)
 nt.build_from_device("olt", 10, port=[1, 2, 3, (8, 12)])
-# внутри: построение по портам и объединение связных компонент, где возможно
 for i, cg in enumerate(nt.cgraphs):
     print(i, cg.vcount(), cg.ecount())
+
+att = Attenuation(topology=nt, wavelength=1550)
+multi = att.calculate()  # ветви по всем компонентам
 ```
 
 ### Сохранение / загрузка
@@ -331,7 +330,6 @@ for i, cg in enumerate(nt.cgraphs):
 ```python
 nt.save_to_file("/tmp/topo.json")
 nt2 = NetworkTopology.load_from_file("/tmp/topo.json")
-# client/cache при необходимости задать снова для догрузки API
 ```
 
 ---
@@ -340,18 +338,37 @@ nt2 = NetworkTopology.load_from_file("/tmp/topo.json")
 
 Подробно: [attenuation.md](attenuation.md).
 
-Кратко:
-
 ```python
-att = Attenuation(cgraph=nt.cgraphs[0], client=client, wavelength=1490)
-res = att.calculate()                      # весь cgraph
-res = att.calculate("customer", 17711)     # до авто-терминала
+att = Attenuation(topology=nt, wavelength=1490)
+# также: Attenuation(cgraph=cg) или Attenuation(cgraph=[cg1, cg2])
+res = att.calculate()
+res = att.calculate("customer", 17711)
 res = att.calculate("customer", 17711, "olt", 11808, obj2_port=11)
+print(res.to_table())  # sNpM, host, name, port_name
 ```
 
 ---
 
-## 12. Ошибки
+## 12. Структура подмодулей
+
+| Путь | Назначение |
+|------|------------|
+| `topology.py` | `NetworkTopology` |
+| `topology_build_methods.py` | `build_from_*` |
+| `ports_spec.py` | разбор `port=` |
+| `linear.py` / `linear_extract.py` | линейный режим и вырезание |
+| `graphs/cgraph.py`, `fngraph.py` | CGraph, FNGraph |
+| `builders/` | BFS-обработчики объектов |
+| `cache.py` | `DataCache` |
+| `merge.py` | `merge_cgraphs` / `merge_fngraphs` |
+| `paths.py` | `simple_paths`, shortest path |
+| `attenuation/` | расчёт оптических затуханий |
+
+Полное дерево: [package-structure.md](package-structure.md).
+
+---
+
+## 13. Ошибки
 
 | Исключение | Когда |
 |------------|--------|
