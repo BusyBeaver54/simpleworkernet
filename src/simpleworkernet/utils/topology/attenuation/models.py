@@ -1,37 +1,122 @@
 # simpleworkernet/utils/topology/attenuation/models.py
 """Модели отчёта и сегментов затухания."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from pathlib import Path
+from typing import List, Optional, Union
+
+from ..constants import TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER
+
+_DEVICE_EP = frozenset({TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO})
+
+
+@dataclass
+class EndpointInfo:
+    obj_type: str = ""
+    obj_id: str = ""
+    obj_name: Optional[str] = None
+    side: Optional[int] = None
+    port: Optional[int] = None
+    port_name: Optional[str] = None
+    host: Optional[str] = None
+    commutation_index: Optional[int] = None
+    label: str = ""
+    meta: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        d = {
+            "obj_type": self.obj_type,
+            "obj_id": self.obj_id,
+            "obj_name": self.obj_name,
+            "side": self.side,
+            "port": self.port,
+            "port_name": self.port_name,
+            "host": self.host,
+            "commutation_index": self.commutation_index,
+            "label": self.label,
+        }
+        if self.meta:
+            d["meta"] = self.meta
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "EndpointInfo":
+        if not d:
+            return cls()
+        return cls(
+            obj_type=str(d.get("obj_type") or ""),
+            obj_id=str(d.get("obj_id") or ""),
+            obj_name=str(d["obj_name"]) if d.get("obj_name") is not None else None,
+            side=int(d["side"]) if d.get("side") is not None else None,
+            port=int(d["port"]) if d.get("port") is not None else None,
+            port_name=str(d["port_name"]) if d.get("port_name") is not None else None,
+            host=str(d["host"]) if d.get("host") is not None else None,
+            commutation_index=int(d["commutation_index"]) if d.get("commutation_index") is not None else None,
+            label=str(d.get("label") or ""),
+            meta=dict(d.get("meta") or {}),
+        )
+
+    def format_sp(self) -> str:
+        """Компактная метка стороны/порта: s1p0."""
+        s = self.side if self.side is not None else "?"
+        p = self.port if self.port is not None else "?"
+        return f"s{s}p{p}"
+
+    def format_header(self) -> str:
+        """Строка для шапки to_table: type:id sNpM + host/name/port_name."""
+        parts = [f"{self.obj_type}:{self.obj_id}", self.format_sp()]
+        if self.host:
+            parts.append(f"host={self.host}")
+        if self.obj_name:
+            parts.append(f"name={self.obj_name}")
+        if self.port_name:
+            parts.append(f"port={self.port_name}")
+        if self.commutation_index is not None:
+            parts.append(f"commutation={self.commutation_index}")
+        return " ".join(parts)
+
+    def __str__(self) -> str:
+        return self.format_header()
 
 
 @dataclass
 class AttenuationSegment:
-    """Один вклад в суммарное затухание на пути."""
-
-    kind: str  # fiber | splitter | splice | adapter | connector | force | unknown
+    kind: str
     db: float
     description: str = ""
     obj_type: Optional[str] = None
     obj_id: Optional[str] = None
+    obj_name: Optional[str] = None
     port: Optional[int] = None
+    port_name: Optional[str] = None
     side: Optional[int] = None
     length_m: Optional[float] = None
-    length_source: Optional[str] = None  # opticalen2 | opticalen | geo | geo_api | forced | none
+    length_source: Optional[str] = None
     wavelength_nm: Optional[int] = None
-    source: str = "default"  # force | profile | default | estimated
+    source: str = "default"
+    db_min: Optional[float] = None
+    db_max: Optional[float] = None
     meta: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.db_min is None:
+            self.db_min = self.db
+        if self.db_max is None:
+            self.db_max = self.db
 
     def to_dict(self) -> dict:
         return {
             "kind": self.kind,
             "db": round(self.db, 4),
+            "db_min": round(self.db_min if self.db_min is not None else self.db, 4),
+            "db_max": round(self.db_max if self.db_max is not None else self.db, 4),
             "description": self.description,
             "obj_type": self.obj_type,
             "obj_id": self.obj_id,
+            "obj_name": self.obj_name,
             "port": self.port,
+            "port_name": self.port_name,
             "side": self.side,
             "length_m": self.length_m,
             "length_source": self.length_source,
@@ -40,23 +125,50 @@ class AttenuationSegment:
             "meta": self.meta,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "AttenuationSegment":
+        db = float(d.get("db") or 0.0)
+        return cls(
+            kind=str(d.get("kind") or "unknown"),
+            db=db,
+            description=str(d.get("description") or ""),
+            obj_type=d.get("obj_type"),
+            obj_id=str(d["obj_id"]) if d.get("obj_id") is not None else None,
+            obj_name=str(d["obj_name"]) if d.get("obj_name") is not None else None,
+            port=int(d["port"]) if d.get("port") is not None else None,
+            port_name=str(d["port_name"]) if d.get("port_name") is not None else None,
+            side=int(d["side"]) if d.get("side") is not None else None,
+            length_m=float(d["length_m"]) if d.get("length_m") is not None else None,
+            length_source=d.get("length_source"),
+            wavelength_nm=int(d["wavelength_nm"]) if d.get("wavelength_nm") is not None else None,
+            source=str(d.get("source") or "default"),
+            db_min=float(d["db_min"]) if d.get("db_min") is not None else db,
+            db_max=float(d["db_max"]) if d.get("db_max") is not None else db,
+            meta=dict(d.get("meta") or {}),
+        )
+
 
 @dataclass
 class PathReport:
-    """Результат расчёта затухания вдоль пути."""
-
     total_db: float = 0.0
+    total_db_min: float = 0.0
+    total_db_max: float = 0.0
     wavelength_nm: int = 1550
     segments: List[AttenuationSegment] = field(default_factory=list)
     vertex_path: List[int] = field(default_factory=list)
-    direction: str = ""  # downstream | upstream | unknown
+    direction: str = ""
     from_label: str = ""
     to_label: str = ""
+    from_endpoint: Optional[EndpointInfo] = None
+    to_endpoint: Optional[EndpointInfo] = None
+    device_endpoint: Optional[EndpointInfo] = None
+    customer_endpoint: Optional[EndpointInfo] = None
     warnings: List[str] = field(default_factory=list)
     missing: List[str] = field(default_factory=list)
+    query_meta: dict = field(default_factory=dict)
 
     @property
-    def length_m(self) -> float:
+    def fiber_length_m(self) -> float:
         return sum(s.length_m or 0.0 for s in self.segments if s.kind == "fiber")
 
     @property
@@ -68,61 +180,147 @@ class PathReport:
         return sum(s.db for s in self.segments if s.kind == "splitter")
 
     @property
-    def passive_db(self) -> float:
-        return sum(
-            s.db
-            for s in self.segments
-            if s.kind in ("splice", "adapter", "connector")
-        )
+    def joint_db(self) -> float:
+        return sum(s.db for s in self.segments if s.kind in ("splice", "adapter", "connector"))
 
     def by_kind(self) -> dict:
-        out: dict = {}
+        out = {}
         for s in self.segments:
             out[s.kind] = out.get(s.kind, 0.0) + s.db
         return {k: round(v, 4) for k, v in out.items()}
 
+    def _pick_device_customer(self):
+        """Определить оборудование (olt/switch/…) и абонента среди концов."""
+        device = self.device_endpoint
+        customer = self.customer_endpoint
+        ends = [ep for ep in (self.from_endpoint, self.to_endpoint) if ep is not None]
+
+        if customer is None:
+            for ep in ends:
+                if ep.obj_type == TYPE_CUSTOMER:
+                    customer = ep
+                    break
+
+        if device is None:
+            for prefer in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO):
+                for ep in ends:
+                    if ep.obj_type == prefer:
+                        device = ep
+                        break
+                if device is not None:
+                    break
+            if device is None:
+                for ep in ends:
+                    if ep.obj_type in _DEVICE_EP:
+                        device = ep
+                        break
+
+        return device, customer
+
     def to_table(self) -> str:
+        device, customer = self._pick_device_customer()
         lines = [
-            f"Path: {self.from_label} → {self.to_label}  "
-            f"[{self.direction}]  λ={self.wavelength_nm} nm",
-            f"Total: {self.total_db:.3f} dB  "
+            f"Path  λ={self.wavelength_nm} nm  "
+            f"calc={self.total_db:.3f}  min={self.total_db_min:.3f}  "
+            f"max={self.total_db_max:.3f} dB "
             f"(fiber={self.fiber_db:.3f}, splitter={self.splitter_db:.3f}, "
-            f"passive={self.passive_db:.3f})  L={self.length_m:.1f} m",
-            "-" * 72,
-            f"{'#':>3} {'kind':12} {'dB':>8} {'L,m':>8}  description",
+            f"joints={self.joint_db:.3f})",
         ]
+        if customer is not None:
+            lines.append(f"  customer: {customer.format_header()}")
+        if device is not None:
+            lines.append(f"  {device.obj_type}: {device.format_header()}")
+        if customer is None and device is None:
+            for tag, ep in (("from", self.from_endpoint), ("to", self.to_endpoint)):
+                if ep is not None:
+                    lines.append(f"  {tag}: {ep.format_header()}")
+        lines.append("-" * 72)
         for i, s in enumerate(self.segments, 1):
-            lm = f"{s.length_m:.1f}" if s.length_m is not None else "-"
-            lines.append(
-                f"{i:>3} {s.kind:12} {s.db:>8.3f} {lm:>8}  {s.description}"
-            )
+            bits = []
+            if s.obj_type and s.obj_id:
+                bits.append(f"{s.obj_type}:{s.obj_id}")
+            if s.obj_name:
+                bits.append(f"name={s.obj_name}")
+            if s.side is not None or s.port is not None:
+                sp = f"s{s.side if s.side is not None else '?'}p{s.port if s.port is not None else '?'}"
+                bits.append(sp)
+            if s.port_name:
+                bits.append(f"port={s.port_name}")
+            if s.length_m is not None:
+                bits.append(f"L={s.length_m:.1f}m")
+            if s.length_source:
+                bits.append(f"Lsrc={s.length_source}")
+            bits.append(f"min={s.db_min:.3f}")
+            bits.append(f"max={s.db_max:.3f}")
+            if s.source:
+                bits.append(f"src={s.source}")
+            extra = " [" + ", ".join(bits) + "]"
+            lines.append(f"{i:3d}. {s.kind:10s} {s.db:7.3f} dB  {s.description}{extra}")
         if self.warnings:
-            lines.append("Warnings:")
-            for w in self.warnings:
-                lines.append(f"  ! {w}")
+            lines.append("warnings: " + "; ".join(self.warnings))
         if self.missing:
-            lines.append("Missing profiles:")
-            for m in self.missing:
-                lines.append(f"  ? {m}")
+            lines.append("missing: " + "; ".join(self.missing))
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
+        device, customer = self._pick_device_customer()
         return {
+            "schema": "simpleworkernet.attenuation.PathReport/v3",
             "total_db": round(self.total_db, 4),
+            "total_db_min": round(self.total_db_min, 4),
+            "total_db_max": round(self.total_db_max, 4),
             "wavelength_nm": self.wavelength_nm,
+            "from_endpoint": self.from_endpoint.to_dict() if self.from_endpoint else None,
+            "to_endpoint": self.to_endpoint.to_dict() if self.to_endpoint else None,
+            "device_endpoint": device.to_dict() if device else None,
+            "customer_endpoint": customer.to_dict() if customer else None,
             "direction": self.direction,
-            "from": self.from_label,
-            "to": self.to_label,
-            "length_m": round(self.length_m, 2),
-            "by_kind": self.by_kind(),
             "segments": [s.to_dict() for s in self.segments],
             "vertex_path": self.vertex_path,
             "warnings": self.warnings,
             "missing": self.missing,
+            "query_meta": self.query_meta,
+            "by_kind": self.by_kind(),
+            "fiber_length_m": round(self.fiber_length_m, 2),
         }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PathReport":
+        segs = [AttenuationSegment.from_dict(s) for s in (d.get("segments") or [])]
+        fe, te = d.get("from_endpoint"), d.get("to_endpoint")
+        de, ce = d.get("device_endpoint"), d.get("customer_endpoint")
+        total = float(d.get("total_db") or 0.0)
+        return cls(
+            total_db=total,
+            total_db_min=float(d["total_db_min"]) if d.get("total_db_min") is not None else total,
+            total_db_max=float(d["total_db_max"]) if d.get("total_db_max") is not None else total,
+            wavelength_nm=int(d.get("wavelength_nm") or 1550),
+            segments=segs,
+            vertex_path=list(d.get("vertex_path") or []),
+            direction=str(d.get("direction") or ""),
+            from_label=str(d.get("from") or d.get("from_label") or ""),
+            to_label=str(d.get("to") or d.get("to_label") or ""),
+            from_endpoint=EndpointInfo.from_dict(fe) if fe else None,
+            to_endpoint=EndpointInfo.from_dict(te) if te else None,
+            device_endpoint=EndpointInfo.from_dict(de) if de else None,
+            customer_endpoint=EndpointInfo.from_dict(ce) if ce else None,
+            warnings=list(d.get("warnings") or []),
+            missing=list(d.get("missing") or []),
+            query_meta=dict(d.get("query_meta") or {}),
+        )
+
+    def save(self, path: Union[str, Path] = None, **kwargs):
+        from .report_io import save_path_report
+        return save_path_report(self, path, **kwargs)
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "PathReport":
+        from .report_io import load_path_report
+        return load_path_report(path)
 
     def __repr__(self) -> str:
         return (
-            f"PathReport({self.from_label!r}→{self.to_label!r}, "
-            f"{self.total_db:.3f} dB, segs={len(self.segments)})"
+            f"PathReport(calc={self.total_db:.3f}, "
+            f"min={self.total_db_min:.3f}, max={self.total_db_max:.3f} dB, "
+            f"segs={len(self.segments)})"
         )

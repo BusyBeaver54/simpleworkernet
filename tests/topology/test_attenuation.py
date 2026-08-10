@@ -9,6 +9,7 @@ from simpleworkernet.utils.topology.attenuation import (
     AttenuationCatalog,
     PathReport,
 )
+from simpleworkernet.utils.topology.attenuation.catalog import guess_ratio_key
 from simpleworkernet.utils.topology.attenuation.length import (
     path_length_m,
     resolve_fiber_length_m,
@@ -18,17 +19,28 @@ from simpleworkernet.utils.topology.attenuation.models import AttenuationSegment
 
 def test_catalog_defaults():
     cat = AttenuationCatalog.with_defaults()
-    assert cat.fiber_db_per_km(1550) == pytest.approx(0.22)
-    assert cat.fiber_db_per_km(1310) == pytest.approx(0.35)
+    assert cat.fiber_db_per_km(1550) == pytest.approx(0.19)
+    assert cat.fiber_db_per_km(1310) == pytest.approx(0.34)
+    assert cat.fiber_db_per_km(1550, use_max=True) == pytest.approx(0.22)
     assert cat.splice_db() > 0
     assert cat.adapter_db() > 0
+
+
+def test_catalog_nearest_wavelength():
+    cat = AttenuationCatalog.with_defaults()
+    # 1548 отсутствует → ближайшая 1550
+    v = cat.fiber_db_per_km(1548)
+    assert v == pytest.approx(0.19)
 
 
 def test_catalog_force_fiber():
     cat = AttenuationCatalog.with_defaults()
     cat.force_fiber(100, 0.5)
-    assert cat.forced_fiber_db_per_km(100) == 0.5
-    assert cat.forced_fiber_db_per_km(999) is None
+    assert cat.forced_fiber_db_per_km(100, 1550) == 0.5
+    assert cat.forced_fiber_db_per_km(999, 1550) is None
+    cat.force_fiber(200, {1310: 0.4, 1550: {"db": 0.18, "db_max": 0.22}})
+    assert cat.forced_fiber_db_per_km(200, 1550) == pytest.approx(0.18)
+    assert cat.forced_fiber_db_per_km(200, 1550, use_max=True) == pytest.approx(0.22)
 
 
 def test_catalog_splitter_ratio():
@@ -38,6 +50,12 @@ def test_catalog_splitter_ratio():
     assert db > 10  # leg 5%
     db2, src2 = cat.splitter_port_db(ratio_key="1x2_5/95", port=2, port_count_out=2)
     assert db2 < 2  # leg 95%
+    # by port name
+    db3, src3 = cat.splitter_port_db(
+        ratio_key="1x2_5/95", port_name="5%", port_count_out=2
+    )
+    assert src3 == "ratio"
+    assert db3 > 10
 
 
 def test_catalog_splitter_estimated():
@@ -47,6 +65,21 @@ def test_catalog_splitter_estimated():
     assert db > 9  # ~10.5 theoretical + excess
 
 
+def test_catalog_force_splitter_and_cross():
+    cat = AttenuationCatalog.with_defaults()
+    cat.force_splitter_port(42, port=3, db=11.1)
+    db, src = cat.splitter_port_db(splitter_id=42, port=3)
+    assert src == "force" and db == pytest.approx(11.1)
+    cat.force_cross(7, 0.15)
+    assert cat.forced_cross_db(7) == pytest.approx(0.15)
+
+
+def test_guess_ratio_key():
+    assert guess_ratio_key("FBT Splitter 1x2 5/95 SC") == "1x2_5/95"
+    assert guess_ratio_key("PLC 1x8") == "1x8_equal"
+    assert guess_ratio_key("unknown box") is None
+
+
 def test_catalog_json_roundtrip(tmp_path):
     cat = AttenuationCatalog.with_defaults()
     cat.set_cable(12, name="OKL", db_per_km={1310: 0.4, 1550: 0.25})
@@ -54,6 +87,7 @@ def test_catalog_json_roundtrip(tmp_path):
     cat.save(path)
     loaded = AttenuationCatalog.from_json(path)
     assert loaded.cable_db_per_km(12, 1550) == pytest.approx(0.25)
+    assert loaded.cable_db_per_km(None, 1550, name="OKL") == pytest.approx(0.25)
 
 
 def test_resolve_length_opticalen2():

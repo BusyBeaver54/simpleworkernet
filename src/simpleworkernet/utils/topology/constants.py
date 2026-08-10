@@ -1,18 +1,41 @@
 # simpleworkernet/utils/topology/constants.py
-"""Константы типов объектов сети."""
+"""Реэкспорт типов объектов.
 
-from typing import Set
+Источник истины: ``simpleworkernet.utils.constants``.
+Этот модуль оставлен для обратной совместимости::
 
-TYPE_CUSTOMER = "customer"
-TYPE_FIBER = "fiber"
-TYPE_SPLITTER = "splitter"
-TYPE_CROSS = "cross"
-TYPE_CWDM = "cwdm"
-TYPE_SWITCH = "switch"
-TYPE_OLT = "olt"
-TYPE_ONU = "onu"
-TYPE_RADIO = "radio"
+    from simpleworkernet.utils.topology.constants import TYPE_FIBER  # OK
+    from simpleworkernet.utils.constants import TYPE_FIBER           # предпочтительно
+"""
 
-DEVICE_TYPES: Set[str] = {TYPE_SWITCH, TYPE_OLT, TYPE_ONU, TYPE_RADIO}
-SIDE_TYPES: Set[str] = {TYPE_CROSS, TYPE_FIBER, TYPE_SPLITTER, TYPE_CWDM}
-TERMINAL_TYPES: Set[str] = {TYPE_CUSTOMER} | DEVICE_TYPES
+from ..constants import (  # noqa: F401
+    TYPE_CUSTOMER,
+    TYPE_FIBER,
+    TYPE_SPLITTER,
+    TYPE_CROSS,
+    TYPE_CWDM,
+    TYPE_SWITCH,
+    TYPE_OLT,
+    TYPE_ONU,
+    TYPE_RADIO,
+    DEVICE_TYPES,
+    SIDE_TYPES,
+    TERMINAL_TYPES,
+    ALL_OBJECT_TYPES,
+)
+
+__all__ = [
+    "TYPE_CUSTOMER",
+    "TYPE_FIBER",
+    "TYPE_SPLITTER",
+    "TYPE_CROSS",
+    "TYPE_CWDM",
+    "TYPE_SWITCH",
+    "TYPE_OLT",
+    "TYPE_ONU",
+    "TYPE_RADIO",
+    "DEVICE_TYPES",
+    "SIDE_TYPES",
+    "TERMINAL_TYPES",
+    "ALL_OBJECT_TYPES",
+]

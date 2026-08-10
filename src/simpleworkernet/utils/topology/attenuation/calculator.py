@@ -1,861 +1,523 @@
 # simpleworkernet/utils/topology/attenuation/calculator.py
-"""Attenuation — расчёт затуханий по CGraph по запросу."""
-
+"""Attenuation — calculate() between objects or over entire CGraph."""
 from __future__ import annotations
-
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
-
+from typing import Any, List, Optional, Sequence, Tuple, Union
+from ..keys import Interface
 from ..constants import (
-    DEVICE_TYPES,
-    TYPE_CROSS,
-    TYPE_CUSTOMER,
-    TYPE_FIBER,
-    TYPE_OLT,
-    TYPE_SPLITTER,
-    TYPE_SWITCH,
+    TYPE_CUSTOMER, TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH,
+    TERMINAL_TYPES,
 )
-from ..keys import Interface, ObjKey
 from .catalog import AttenuationCatalog
-from .length import resolve_fiber_length_m
-from .models import AttenuationSegment, PathReport
+from .models import PathReport
+from .multipath import MultiPathReport
+from .calculator_segments import AttenuationSegmentsMixin, _label_vertex
+from .calculator_path import AttenuationPathMixin
+from .calculator_edge import AttenuationEdgeMixin
+from .calculator_build import AttenuationBuildMixin
+from .calculator_fn import AttenuationFNMixin
+from .calculator_fiber import AttenuationFiberMixin
+from .calculator_paths import AttenuationPathsMixin
+from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
 
-# В handlers.SplitterCwdmHandler: side=1 ↔ side=2 fully connected.
-# Соглашение WorkerNet / handlers: side 1 = IN, side 2 = OUT.
-_SPLITTER_IN_SIDE = 1
-_SPLITTER_OUT_SIDE = 2
+_SINK_TYPES = frozenset({TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO})
+_SOURCE_TYPES = frozenset({TYPE_CUSTOMER}) | _SINK_TYPES
 
 
-def _label_vertex(vattrs: dict) -> str:
-    return (
-        f"{vattrs.get('obj_type')}:{vattrs.get('obj_id')}"
-        f" s{vattrs.get('side')}p{vattrs.get('port')}"
+def _is_network_topology(obj: Any) -> bool:
+    if obj is None:
+        return False
+    cgraphs = getattr(obj, "cgraphs", None)
+    return isinstance(cgraphs, list) and hasattr(obj, "client")
+
+
+def _is_cgraph_like(obj: Any) -> bool:
+    if obj is None:
+        return False
+    return hasattr(obj, "vs") and (
+        hasattr(obj, "vcount") or hasattr(obj, "get_eid") or hasattr(obj, "es")
     )
 
 
-class Attenuation:
-    """
-    Калькулятор затуханий для уже построенного CGraph.
-
-    Не вызывается при build — только по явному запросу.
-
-        att = Attenuation(cgraph, wavelength=1550)
-        r = att.olt_to_customer(customer_id)
-        r = att.along_linear()          # если cgraph уже линейный
-    """
-
+class Attenuation(
+    AttenuationBuildMixin,
+    AttenuationFNMixin,
+    AttenuationFiberMixin,
+    AttenuationSegmentsMixin,
+    AttenuationEdgeMixin,
+    AttenuationPathMixin,
+    AttenuationPathsMixin,
+):
     def __init__(
         self,
-        cgraph: Any,
+        cgraph: Any = None,
         *,
+        topology: Any = None,
         catalog: Optional[AttenuationCatalog] = None,
         wavelength: int = 1550,
         cache: Any = None,
         client: Any = None,
+        use_max: bool = False,
     ) -> None:
-        self.g = cgraph
-        self.catalog = catalog or AttenuationCatalog.with_defaults()
+        """Инициализация расчёта затуханий.
+
+        Параметры источника графа (любой из вариантов):
+
+        * ``cgraph`` — один CGraph, список CGraph **или** NetworkTopology
+        * ``topology`` — явно NetworkTopology (приоритет, если задан оба)
+
+        Примеры::
+
+            Attenuation(cgraph=cg)
+            Attenuation(cgraph=[cg1, cg2])
+            Attenuation(topology=nt)
+            Attenuation(cgraph=nt)
+            Attenuation(client=client)
+        """
+        self.topology: Any = None
+        self.cgraphs: List[Any] = []
+        self.g: Any = None
+
         self.wavelength = int(wavelength)
-        self.cache = cache if cache is not None else getattr(cgraph, "cache", None)
-        self.client = client if client is not None else getattr(cgraph, "client", None)
+        self.use_max = bool(use_max)
 
-    # ------------------------------------------------------------------
-    # vertex resolution
-    # ------------------------------------------------------------------
+        self._bind_graphs(cgraph=cgraph, topology=topology)
 
-    def _vertex_attrs(self, idx: int) -> dict:
-        v = self.g.vs[idx]
-        return {k: v[k] for k in v.attributes()}
+        if client is not None:
+            self.client = client
+        elif self.topology is not None:
+            self.client = getattr(self.topology, "client", None)
+        elif self.g is not None:
+            self.client = getattr(self.g, "client", None)
+        elif self.cgraphs:
+            self.client = getattr(self.cgraphs[0], "client", None)
+        else:
+            self.client = None
 
-    def find_vertices(
+        if cache is not None:
+            self.cache = cache
+        elif self.topology is not None:
+            self.cache = getattr(self.topology, "cache", None)
+        elif self.g is not None:
+            self.cache = getattr(self.g, "cache", None)
+        elif self.cgraphs:
+            self.cache = getattr(self.cgraphs[0], "cache", None)
+        else:
+            self.cache = None
+
+        if catalog is not None:
+            self.catalog = catalog
+        else:
+            loaded = None
+            if self.client is not None:
+                try:
+                    from .template import load_attenuation_catalog
+                    loaded = load_attenuation_catalog(self.client)
+                except Exception:
+                    loaded = None
+            self.catalog = loaded or AttenuationCatalog.with_defaults()
+
+    def _bind_graphs(self, *, cgraph: Any = None, topology: Any = None) -> None:
+        self.topology = None
+        self.cgraphs = []
+        self.g = None
+
+        src = topology if topology is not None else cgraph
+        if src is None:
+            return
+
+        if topology is not None and cgraph is not None and topology is not cgraph:
+            src = topology
+
+        if _is_network_topology(src):
+            self.topology = src
+            self.cgraphs = [cg for cg in (src.cgraphs or []) if cg is not None]
+            if len(self.cgraphs) == 1:
+                self.g = self.cgraphs[0]
+            return
+
+        if isinstance(src, (list, tuple)):
+            self.cgraphs = [cg for cg in src if cg is not None]
+            if len(self.cgraphs) == 1:
+                self.g = self.cgraphs[0]
+            return
+
+        if _is_cgraph_like(src):
+            self.cgraphs = [src]
+            self.g = src
+            return
+
+        self.cgraphs = [src]
+        self.g = src
+
+    def _cgraph_has_object(
         self,
-        obj_type: Optional[str] = None,
-        obj_id: Optional[Union[int, str]] = None,
-        *,
+        cg: Any,
+        obj_type: str,
+        obj_id: Union[int, str],
         side: Optional[int] = None,
         port: Optional[int] = None,
-        node_id: Optional[int] = None,
-    ) -> List[int]:
-        found: List[int] = []
-        for v in self.g.vs:
-            if obj_type is not None and v["obj_type"] != obj_type:
-                continue
-            if obj_id is not None and str(v["obj_id"]) != str(obj_id):
-                continue
-            if side is not None and int(v["side"]) != int(side):
-                continue
-            if port is not None and int(v["port"]) != int(port):
-                continue
-            if node_id is not None and v["node_id"] != node_id:
-                continue
-            found.append(v.index)
-        return found
-
-    def find_vertex(
-        self,
-        obj_type: Optional[str] = None,
-        obj_id: Optional[Union[int, str]] = None,
-        **kwargs: Any,
-    ) -> Optional[int]:
-        hits = self.find_vertices(obj_type, obj_id, **kwargs)
-        return hits[0] if hits else None
-
-    def resolve_vertex(self, ref: VertexRef) -> Optional[int]:
-        if isinstance(ref, int):
-            return ref if 0 <= ref < self.g.vcount() else None
-        if isinstance(ref, Interface):
-            return self.find_vertex(
-                ref.obj.obj_type, ref.obj.id, side=ref.side, port=ref.port
-            )
-        if isinstance(ref, tuple) and len(ref) >= 2:
-            obj_type, obj_id = ref[0], ref[1]
-            side = ref[2] if len(ref) > 2 else None
-            port = ref[3] if len(ref) > 3 else None
-            return self.find_vertex(obj_type, obj_id, side=side, port=port)
-        if isinstance(ref, str) and ":" in ref:
-            parts = ref.split(":")
-            obj_type = parts[0]
-            obj_id = parts[1]
-            side = int(parts[2]) if len(parts) > 2 else None
-            port = int(parts[3]) if len(parts) > 3 else None
-            return self.find_vertex(obj_type, obj_id, side=side, port=port)
-        return None
-
-    def find_olts(self) -> List[int]:
-        return self.find_vertices(TYPE_OLT)
-
-    def find_customers(self) -> List[int]:
-        return self.find_vertices(TYPE_CUSTOMER)
-
-    def primary_olt(self) -> Optional[int]:
-        olts = self.find_olts()
-        return olts[0] if olts else None
-
-    # ------------------------------------------------------------------
-    # path finding
-    # ------------------------------------------------------------------
-
-    def shortest_path(self, source: int, target: int) -> List[int]:
+    ) -> bool:
+        if cg is None:
+            return False
         try:
-            path = self.g.get_shortest_paths(source, to=target, output="vpath")
-            if path and path[0]:
-                return list(path[0])
+            vs = cg.vs
         except Exception:
-            pass
-        return []
-
-    def linear_vertex_order(self) -> List[int]:
-        """
-        Порядок вершин линейного CGraph (после topology_from_commutation).
-
-        Идём от конечной степени-1 вершины (customer/OLT) по единственному
-        соседу, не возвращаясь назад.
-        """
-        n = self.g.vcount()
-        if n == 0:
-            return []
-        if n == 1:
-            return [0]
-
-        degrees = self.g.degree()
-        ends = [i for i, d in enumerate(degrees) if d == 1]
-        if not ends:
-            # цикл или плотный — fallback: shortest OLT→customer
-            olt = self.primary_olt()
-            custs = self.find_customers()
-            if olt is not None and custs:
-                return self.shortest_path(olt, custs[0])
-            return list(range(n))
-
-        # предпочтительно старт с OLT, иначе customer, иначе любой конец
-        start = ends[0]
-        for i in ends:
-            t = self.g.vs[i]["obj_type"]
-            if t == TYPE_OLT:
-                start = i
-                break
-            if t == TYPE_CUSTOMER:
-                start = i
-
-        order = [start]
-        prev = None
-        cur = start
-        while True:
-            neighbors = [
-                n_idx
-                for n_idx in self.g.neighbors(cur)
-                if n_idx != prev
-            ]
-            if not neighbors:
-                break
-            nxt = neighbors[0]
-            order.append(nxt)
-            prev, cur = cur, nxt
-            if len(order) > n:
-                break
-        return order
-
-    def _direction_of_path(self, vpath: Sequence[int]) -> str:
-        if not vpath:
-            return "unknown"
-        types = [self.g.vs[i]["obj_type"] for i in vpath]
-        if TYPE_OLT in types and TYPE_CUSTOMER in types:
-            if types.index(TYPE_OLT) < types.index(TYPE_CUSTOMER):
-                return "downstream"
-            return "upstream"
-        if TYPE_OLT in types:
-            return "downstream" if types[0] == TYPE_OLT else "upstream"
-        if TYPE_CUSTOMER in types:
-            return "upstream" if types[0] == TYPE_CUSTOMER else "downstream"
-        return "unknown"
-
-    # ------------------------------------------------------------------
-    # splitter side helpers (handlers: side1 ↔ side2)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _splitter_out_vertex(ua: dict, va: dict) -> dict:
-        """
-        На internal-ребре сплиттера выбираем OUT-вершину.
-
-        Handlers: side=1 (IN) полностью связан с side=2 (OUT).
-        Затухание порта = порт OUT-стороны (side 2).
-        Если стороны перепутаны в данных — берём сторону с большим side.
-        """
-        if (
-            ua.get("obj_type") == TYPE_SPLITTER
-            and va.get("obj_type") == TYPE_SPLITTER
-            and str(ua.get("obj_id")) == str(va.get("obj_id"))
-        ):
-            us, vs_ = int(ua.get("side", 1)), int(va.get("side", 1))
-            if us == _SPLITTER_OUT_SIDE and vs_ == _SPLITTER_IN_SIDE:
-                return ua
-            if vs_ == _SPLITTER_OUT_SIDE and us == _SPLITTER_IN_SIDE:
-                return va
-            # обе out или обе in — по большему side, затем port
-            if us != vs_:
-                return ua if us > vs_ else va
-            return ua if int(ua.get("port", 0)) >= int(va.get("port", 0)) else va
-
-        if ua.get("obj_type") == TYPE_SPLITTER:
-            return ua
-        return va
-
-    # ------------------------------------------------------------------
-    # segment contribution
-    # ------------------------------------------------------------------
-
-    def _fiber_length(
-        self, fiber_id: Union[int, str], fiber_obj: Any
-    ) -> Tuple[Optional[float], str]:
-        if self.cache is not None and hasattr(self.cache, "get_fiber_length_m"):
-            cached = self.cache.get_fiber_length_m(fiber_id)
-            if cached is not None:
-                return cached
-
-        geo_api = None
-        if (
-            self.client is not None
-            and self.cache is not None
-            and hasattr(self.cache, "get_geo_length")
-        ):
-            geo_api = self.cache.get_geo_length(self.client, int(fiber_id))
-
-        length_m, source = resolve_fiber_length_m(
-            fiber_obj,
-            slack_k=self.catalog.geo_slack_k(),
-            geo_length_api=geo_api,
-        )
-        if self.cache is not None and hasattr(self.cache, "set_fiber_length_m"):
-            self.cache.set_fiber_length_m(fiber_id, length_m, source)
-        return length_m, source
-
-    def _splitter_catalog_id(self, splitter_obj: Any) -> Optional[int]:
-        if splitter_obj is None:
-            return None
-        inv_id = getattr(splitter_obj, "inventory_id", None)
-        if inv_id is None or self.cache is None or self.client is None:
-            return None
-        if hasattr(self.cache, "get_inventory"):
-            inv = self.cache.get_inventory(self.client, inv_id)
-            if inv is not None:
-                return getattr(inv, "catalog_id", None)
-        return None
-
-    def _segment_on_edge(
-        self,
-        u: int,
-        v: int,
-        direction: str,
-    ) -> List[AttenuationSegment]:
-        segs: List[AttenuationSegment] = []
-        ua, va = self._vertex_attrs(u), self._vertex_attrs(v)
-
-        eid = -1
-        try:
-            eid = self.g.get_eid(u, v, directed=False, error=False)
-        except Exception:
-            eid = -1
-        edge_attrs: dict = {}
-        if eid is not None and eid >= 0:
-            e = self.g.es[eid]
-            edge_attrs = {k: e[k] for k in e.attributes()}
-
-        connect_id = int(edge_attrs.get("connect_id") or 0)
-        is_internal = bool(edge_attrs.get("is_internal", False))
-
-        forced_edge = (
-            self.catalog.forced_edge_db(connect_id) if connect_id else None
-        )
-        if forced_edge is not None:
-            segs.append(
-                AttenuationSegment(
-                    kind="force",
-                    db=forced_edge,
-                    description=f"force edge connect_id={connect_id}",
-                    source="force",
-                    meta={"connect_id": connect_id},
-                )
-            )
-            return segs
-
-        # --- fiber internal span (FiberHandler: opposite sides, is_internal) ---
-        if (
-            ua.get("obj_type") == TYPE_FIBER
-            and va.get("obj_type") == TYPE_FIBER
-            and str(ua.get("obj_id")) == str(va.get("obj_id"))
-            and int(ua.get("side", 0)) != int(va.get("side", 0))
-        ):
-            segs.extend(self._fiber_segments(ua))
-            return segs
-
-        # --- splitter internal IN↔OUT (SplitterCwdmHandler) ---
-        if is_internal and (
-            ua.get("obj_type") == TYPE_SPLITTER
-            and va.get("obj_type") == TYPE_SPLITTER
-            and str(ua.get("obj_id")) == str(va.get("obj_id"))
-        ):
-            segs.extend(self._splitter_segments(ua, va, direction))
-            return segs
-
-        # --- cross internal adapter (CrossHandler: side1↔side2, is_internal) ---
-        if is_internal and (
-            ua.get("obj_type") == TYPE_CROSS
-            and va.get("obj_type") == TYPE_CROSS
-            and str(ua.get("obj_id")) == str(va.get("obj_id"))
-        ):
-            db = self.catalog.adapter_db()
-            segs.append(
-                AttenuationSegment(
-                    kind="adapter",
-                    db=db,
-                    description=(
-                        f"adapter cross:{ua.get('obj_id')} "
-                        f"port={ua.get('port')}"
-                    ),
-                    obj_type=TYPE_CROSS,
-                    obj_id=str(ua.get("obj_id")),
-                    port=ua.get("port"),
-                    wavelength_nm=self.wavelength,
-                    source="default",
-                )
-            )
-            return segs
-
-        # --- external hop ---
-        if not is_internal:
-            # стык к кроссу снаружи — уже учтён internal adapter;
-            # здесь: splice/connector на внешнем ребре
-            kinds = {ua.get("obj_type"), va.get("obj_type")}
-            if TYPE_FIBER in kinds:
-                db = self.catalog.splice_db()
-                segs.append(
-                    AttenuationSegment(
-                        kind="splice",
-                        db=db,
-                        description="splice at fiber joint",
-                        source="default",
-                        wavelength_nm=self.wavelength,
-                        meta={"connect_id": connect_id},
-                    )
-                )
-            elif TYPE_CROSS not in kinds:
-                # не дублируем adapter, если один конец — cross (internal уже дал)
-                db = self.catalog.connector_db()
-                segs.append(
-                    AttenuationSegment(
-                        kind="connector",
-                        db=db,
-                        description="connector joint",
-                        source="default",
-                        wavelength_nm=self.wavelength,
-                        meta={"connect_id": connect_id},
-                    )
-                )
-            else:
-                # external к кроссу: лёгкий connector (патч)
-                db = self.catalog.connector_db()
-                segs.append(
-                    AttenuationSegment(
-                        kind="connector",
-                        db=db,
-                        description="patch to cross",
-                        source="default",
-                        wavelength_nm=self.wavelength,
-                        meta={"connect_id": connect_id},
-                    )
-                )
-
-        return segs
-
-    def _fiber_segments(self, fiber_vertex_attrs: dict) -> List[AttenuationSegment]:
-        fiber_id = fiber_vertex_attrs.get("obj_id")
-        fiber_obj = fiber_vertex_attrs.get("api_obj")
-        if fiber_obj is None and self.cache is not None and self.client is not None:
-            fiber_obj = self.cache.get_fiber(self.client, int(fiber_id))
-
-        length_m, length_source = self._fiber_length(fiber_id, fiber_obj)
-
-        forced = self.catalog.forced_fiber_db_per_km(fiber_id)
-        cabletype_id = None
-        if fiber_obj is not None:
-            cabletype_id = (
-                getattr(fiber_obj, "cablecode", None)
-                or getattr(fiber_obj, "cabletype_id", None)
-                or getattr(fiber_obj, "cable_line_type_id", None)
-            )
-
-        if forced is not None:
-            alpha = forced
-            source = "force"
-        else:
-            alpha = self.catalog.cable_db_per_km(cabletype_id, self.wavelength)
-            source = "profile" if cabletype_id is not None else "default"
-
-        if length_m is None:
-            return [
-                AttenuationSegment(
-                    kind="fiber",
-                    db=0.0,
-                    description=f"fiber:{fiber_id} length unknown",
-                    obj_type=TYPE_FIBER,
-                    obj_id=str(fiber_id),
-                    length_m=None,
-                    length_source=length_source,
-                    wavelength_nm=self.wavelength,
-                    source=source,
-                    meta={"db_per_km": alpha, "cabletype_id": cabletype_id},
-                )
-            ]
-
-        db = alpha * (length_m / 1000.0)
-        return [
-            AttenuationSegment(
-                kind="fiber",
-                db=db,
-                description=(
-                    f"fiber:{fiber_id} L={length_m:.1f}m "
-                    f"α={alpha:.3f} dB/km ({length_source})"
-                ),
-                obj_type=TYPE_FIBER,
-                obj_id=str(fiber_id),
-                length_m=length_m,
-                length_source=length_source,
-                wavelength_nm=self.wavelength,
-                source=source,
-                meta={"db_per_km": alpha, "cabletype_id": cabletype_id},
-            )
-        ]
-
-    def _splitter_segments(
-        self, ua: dict, va: dict, direction: str
-    ) -> List[AttenuationSegment]:
-        """
-        dB порта OUT (side=2) — одинаково downstream и upstream.
-        """
-        out_attrs = self._splitter_out_vertex(ua, va)
-        splitter_id = out_attrs.get("obj_id")
-        port = int(out_attrs.get("port") or 0)
-        side = int(out_attrs.get("side") or _SPLITTER_OUT_SIDE)
-
-        splitter_obj = out_attrs.get("api_obj")
-        if splitter_obj is None and self.cache is not None and self.client is not None:
+            return False
+        oid = str(obj_id)
+        for v in vs:
             try:
-                splitter_obj = self.cache.get_splitter(self.client, int(splitter_id))
+                if v["obj_type"] != obj_type:
+                    continue
+                if str(v["obj_id"]) != oid:
+                    continue
             except Exception:
-                splitter_obj = None
+                continue
+            if side is not None:
+                try:
+                    if int(v["side"] if v["side"] is not None else 0) != int(side):
+                        continue
+                except Exception:
+                    continue
+            if port is not None:
+                try:
+                    if int(v["port"] if v["port"] is not None else 0) != int(port):
+                        continue
+                except Exception:
+                    continue
+            return True
+        return False
 
-        catalog_id = self._splitter_catalog_id(splitter_obj)
-        pin = getattr(splitter_obj, "port_count_in", 0) or 0
-        pout = getattr(splitter_obj, "port_count_out", 0) or 0
-        topology = out_attrs.get("splitter_type") or (
-            f"{pin}x{pout}" if pin and pout else None
-        )
-
-        db, source = self.catalog.splitter_port_db(
-            splitter_id=splitter_id,
-            catalog_id=catalog_id,
-            ratio_key=None,
-            topology_type=topology,
-            port=port,
-            port_count_out=pout,
-            wavelength_nm=self.wavelength,
-        )
-
-        return [
-            AttenuationSegment(
-                kind="splitter",
-                db=db,
-                description=(
-                    f"splitter:{splitter_id} out port={port} "
-                    f"side={side} ({topology or '?'}) [{direction}]"
-                ),
-                obj_type=TYPE_SPLITTER,
-                obj_id=str(splitter_id),
-                port=port,
-                side=side,
-                wavelength_nm=self.wavelength,
-                source=source,
-                meta={
-                    "catalog_id": catalog_id,
-                    "topology": topology,
-                    "direction": direction,
-                    "in_side": _SPLITTER_IN_SIDE,
-                    "out_side": _SPLITTER_OUT_SIDE,
-                },
-            )
-        ]
-
-    # ------------------------------------------------------------------
-    # core path calculation
-    # ------------------------------------------------------------------
-
-    def _report_from_vpath(
+    def _select_cgraph_for_objects(
         self,
-        vpath: List[int],
+        obj1_type: str,
+        obj1_id: Union[int, str],
+        obj2_type: Optional[str] = None,
+        obj2_id: Optional[Union[int, str]] = None,
         *,
-        direction: Optional[str] = None,
-    ) -> PathReport:
-        report = PathReport(wavelength_nm=self.wavelength)
-        if not vpath:
-            report.warnings.append("empty path")
-            return report
+        obj1_side: Optional[int] = None,
+        obj1_port: Optional[int] = None,
+        obj2_side: Optional[int] = None,
+        obj2_port: Optional[int] = None,
+    ) -> None:
+        graphs = list(self.cgraphs) if self.cgraphs else (
+            [self.g] if self.g is not None else []
+        )
+        if not graphs:
+            self.g = None
+            return
 
-        report.vertex_path = list(vpath)
-        report.from_label = _label_vertex(self._vertex_attrs(vpath[0]))
-        report.to_label = _label_vertex(self._vertex_attrs(vpath[-1]))
-        report.direction = direction or self._direction_of_path(vpath)
+        if len(graphs) == 1:
+            self.g = graphs[0]
+            return
 
-        for a, b in zip(vpath, vpath[1:]):
-            report.segments.extend(
-                self._segment_on_edge(a, b, report.direction)
+        has_obj2 = obj2_type is not None and obj2_id is not None and obj2_id != ""
+
+        both: List[Any] = []
+        only1: List[Any] = []
+        for cg in graphs:
+            ok1 = self._cgraph_has_object(
+                cg, obj1_type, obj1_id, side=obj1_side, port=obj1_port,
             )
-
-        report.total_db = sum(seg.db for seg in report.segments)
-        for seg in report.segments:
-            if seg.kind == "fiber" and seg.length_m is None:
-                report.missing.append(f"length fiber:{seg.obj_id}")
-            if seg.source == "estimated":
-                report.missing.append(
-                    f"splitter profile {seg.obj_id} port={seg.port}"
+            if not ok1:
+                ok1 = self._cgraph_has_object(cg, obj1_type, obj1_id)
+            if not ok1:
+                continue
+            if has_obj2:
+                ok2 = self._cgraph_has_object(
+                    cg, obj2_type, obj2_id, side=obj2_side, port=obj2_port,
                 )
-        return report
+                if not ok2:
+                    ok2 = self._cgraph_has_object(cg, obj2_type, obj2_id)
+                if ok2:
+                    both.append(cg)
+                else:
+                    only1.append(cg)
+            else:
+                only1.append(cg)
 
-    def path(
+        if both:
+            self.g = both[0]
+            return
+        if only1:
+            self.g = only1[0]
+            return
+        self.g = None
+
+    def calculate(
         self,
-        source: VertexRef,
-        target: VertexRef,
+        obj1_type: Optional[str] = None,
+        obj1_id: Optional[Union[int, str]] = None,
+        obj2_type: Optional[str] = None,
+        obj2_id: Optional[Union[int, str]] = None,
+        *,
+        wavelength: Optional[int] = None,
+        obj1_side: Optional[int] = None,
+        obj1_port: Optional[int] = None,
+        obj2_side: Optional[int] = None,
+        obj2_port: Optional[int] = None,
+        direction: Optional[str] = None,
+        use_max: Optional[bool] = None,
+        max_paths: int = 50,
+    ):
+        """Расчёт затухания.
+
+        1. ``calculate(obj1_type, obj1_id, ...)`` — путь между объектами.
+           При нескольких CGraph выбирается граф, где есть объекты.
+
+        2. ``calculate()`` — по всему CGraph / **всем** cgraph топологии.
+
+        3. без графа и без obj1 → ``AttenuationError``.
+        """
+        prev_wl, prev_max = self.wavelength, self.use_max
+        if wavelength is not None:
+            self.wavelength = int(wavelength)
+        if use_max is not None:
+            self.use_max = bool(use_max)
+        try:
+            has_obj1 = obj1_type is not None and obj1_id is not None and obj1_id != ""
+
+            if not has_obj1:
+                return self._calculate_all_graphs(
+                    direction=direction, max_paths=max_paths,
+                )
+
+            self._require_fiber_port(
+                obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
+                obj1_side=obj1_side, obj2_side=obj2_side,
+            )
+
+            self._select_cgraph_for_objects(
+                obj1_type, obj1_id, obj2_type, obj2_id,
+                obj1_side=obj1_side, obj1_port=obj1_port,
+                obj2_side=obj2_side, obj2_port=obj2_port,
+            )
+
+            self._ensure_cgraph(
+                obj1_type, obj1_id, obj2_type, obj2_id,
+                obj1_side=obj1_side, obj1_port=obj1_port,
+                obj2_side=obj2_side, obj2_port=obj2_port,
+            )
+            if self.g is not None and self.g not in self.cgraphs:
+                self.cgraphs.append(self.g)
+
+            paths = self.find_paths(
+                obj1_type, obj1_id, obj2_type, obj2_id,
+                obj1_side=obj1_side, obj1_port=obj1_port,
+                obj2_side=obj2_side, obj2_port=obj2_port,
+                max_paths=max_paths,
+            )
+            if not paths:
+                raise AttenuationError(
+                    f"нет пути между {obj1_type}:{obj1_id}"
+                    + (f" и {obj2_type}:{obj2_id}" if obj2_type else "")
+                )
+
+            reports = [
+                self._report_from_vpath(p, direction=direction) for p in paths
+            ]
+            if len(reports) == 1:
+                return reports[0]
+            return MultiPathReport(
+                branches=reports,
+                wavelength_nm=self.wavelength,
+                from_label=reports[0].from_label if reports else "",
+                to_label=reports[0].to_label if reports else "",
+            )
+        finally:
+            self.wavelength, self.use_max = prev_wl, prev_max
+
+    def _calculate_all_graphs(
+        self,
         *,
         direction: Optional[str] = None,
-    ) -> PathReport:
-        s = self.resolve_vertex(source)
-        t = self.resolve_vertex(target)
-        if s is None or t is None:
-            report = PathReport(wavelength_nm=self.wavelength)
-            report.warnings.append(
-                f"vertex not found: source={source!r} target={target!r}"
+        max_paths: int = 50,
+    ):
+        graphs = list(self.cgraphs) if self.cgraphs else (
+            [self.g] if self.g is not None else []
+        )
+        if not graphs:
+            raise AttenuationError(
+                "не указаны объекты для расчёта и CGraph не задан: "
+                "передайте cgraph=/topology= в Attenuation(...) или "
+                "obj1_type/obj1_id в calculate(...)"
             )
-            return report
 
+        if len(graphs) == 1:
+            self.g = graphs[0]
+            return self._calculate_full_cgraph(
+                direction=direction, max_paths=max_paths,
+            )
+
+        branches: List[PathReport] = []
+        errors: List[str] = []
+        for i, cg in enumerate(graphs):
+            self.g = cg
+            try:
+                res = self._calculate_full_cgraph(
+                    direction=direction, max_paths=max_paths,
+                )
+            except AttenuationError as e:
+                errors.append(f"cgraph[{i}]: {e}")
+                continue
+            if isinstance(res, PathReport):
+                branches.append(res)
+            elif isinstance(res, MultiPathReport):
+                branches.extend(res.branches)
+
+        if not branches:
+            detail = "; ".join(errors) if errors else "пусто"
+            raise AttenuationError(
+                f"не удалось посчитать ни один CGraph из {len(graphs)}: {detail}"
+            )
+        if len(branches) == 1:
+            return branches[0]
+        return MultiPathReport(
+            branches=branches,
+            wavelength_nm=self.wavelength,
+            from_label="",
+            to_label="",
+            warnings=errors,
+        )
+
+    def _calculate_full_cgraph(
+        self,
+        *,
+        direction: Optional[str] = None,
+        max_paths: int = 50,
+    ):
+        """Затухания по всем значимым путям текущего CGraph."""
+        if self.g is None or getattr(self.g, "vcount", lambda: 0)() == 0:
+            raise AttenuationError("CGraph пуст — нечего считать")
+
+        sources = self._vertices_of_types(_SOURCE_TYPES)
+        sinks = self._vertices_of_types(_SINK_TYPES)
+        customers = self._vertices_of_types({TYPE_CUSTOMER})
+
+        pair_sources = customers if customers else sources
+        pair_sinks = sinks
+
+        if not pair_sources or not pair_sinks:
+            leaves = self._leaf_vertices()
+            if len(leaves) >= 2:
+                if not pair_sources:
+                    pair_sources = leaves
+                if not pair_sinks:
+                    pair_sinks = leaves
+
+        if not pair_sources:
+            raise AttenuationError(
+                "в CGraph нет терминальных вершин (customer/olt/…) для расчёта"
+            )
+
+        if not pair_sinks:
+            pair_sinks = [
+                v for v in self._leaf_vertices()
+                if v not in set(pair_sources)
+            ]
+
+        collected: List[List[int]] = []
+        seen = set()
+        for s in pair_sources:
+            targets = [t for t in pair_sinks if t != s]
+            if not targets:
+                continue
+            for t in targets:
+                sp = self.shortest_path(s, t)
+                if sp and len(sp) >= 2:
+                    key = tuple(sp)
+                    if key not in seen:
+                        seen.add(key)
+                        collected.append(sp)
+                for p in self.all_simple_paths(
+                    s, t, cutoff=200, max_paths=max_paths,
+                ):
+                    if len(p) < 2:
+                        continue
+                    key = tuple(p)
+                    if key not in seen:
+                        seen.add(key)
+                        collected.append(p)
+                    if len(collected) >= max_paths:
+                        break
+            if len(collected) >= max_paths:
+                break
+
+        if not collected:
+            linear = self._linear_cover_path()
+            if linear and len(linear) >= 2:
+                collected = [linear]
+
+        if not collected:
+            raise AttenuationError(
+                "не удалось найти пути в CGraph для расчёта затуханий"
+            )
+
+        reports = [
+            self._report_from_vpath(p, direction=direction) for p in collected
+        ]
+        if len(reports) == 1:
+            return reports[0]
+        return MultiPathReport(
+            branches=reports,
+            wavelength_nm=self.wavelength,
+            from_label=reports[0].from_label if reports else "",
+            to_label=reports[-1].to_label if reports else "",
+        )
+
+    def _vertices_of_types(self, types) -> List[int]:
+        if self.g is None:
+            return []
+        out: List[int] = []
+        for v in self.g.vs:
+            if v["obj_type"] in types:
+                out.append(int(v.index))
+        return out
+
+    def _leaf_vertices(self) -> List[int]:
+        if self.g is None:
+            return []
+        leaves: List[int] = []
+        for v in self.g.vs:
+            idx = int(v.index)
+            try:
+                deg = self.g.degree(idx)
+            except Exception:
+                try:
+                    deg = len(list(self.g.neighbors(idx)))
+                except Exception:
+                    deg = 0
+            if deg == 1:
+                leaves.append(idx)
+        return leaves
+
+    def _linear_cover_path(self) -> List[int]:
+        leaves = self._leaf_vertices()
+        if len(leaves) != 2:
+            is_lin = getattr(self.g, "is_linear", None)
+            if callable(is_lin):
+                try:
+                    if not is_lin():
+                        return []
+                except Exception:
+                    pass
+            if len(leaves) < 2:
+                return []
+        s, t = leaves[0], leaves[-1]
+        return self.shortest_path(s, t)
+
+    def path_report(
+        self, source: VertexRef, target: VertexRef, *,
+        direction: Optional[str] = None,
+    ) -> PathReport:
+        if self.g is None:
+            raise AttenuationError("CGraph не задан")
+        s = self.resolve_vertex(source) if not isinstance(source, int) else source
+        t = self.resolve_vertex(target) if not isinstance(target, int) else target
+        if s is None or t is None:
+            raise AttenuationError("не удалось разрешить вершины пути")
         vpath = self.shortest_path(s, t)
         if not vpath:
-            report = PathReport(wavelength_nm=self.wavelength)
-            report.warnings.append(f"no path between {s} and {t}")
-            report.from_label = _label_vertex(self._vertex_attrs(s))
-            report.to_label = _label_vertex(self._vertex_attrs(t))
-            return report
+            raise AttenuationError("нет пути между вершинами")
         return self._report_from_vpath(vpath, direction=direction)
-
-    def along(
-        self,
-        vpath: Sequence[int],
-        *,
-        direction: Optional[str] = None,
-    ) -> PathReport:
-        """Расчёт по явному списку индексов вершин."""
-        return self._report_from_vpath(list(vpath), direction=direction)
-
-    def along_linear(
-        self,
-        *,
-        reverse: bool = False,
-        direction: Optional[str] = None,
-    ) -> PathReport:
-        """
-        Для CGraph после topology_from_commutation — обход по цепочке,
-        без shortest_path (устойчивее на линейных графах).
-        """
-        order = self.linear_vertex_order()
-        if reverse:
-            order = list(reversed(order))
-        if direction is None:
-            direction = self._direction_of_path(order)
-        return self._report_from_vpath(order, direction=direction)
-
-    def path_db(self, source: VertexRef, target: VertexRef, **kw: Any) -> float:
-        return self.path(source, target, **kw).total_db
-
-    # ------------------------------------------------------------------
-    # convenience queries
-    # ------------------------------------------------------------------
-
-    def between(
-        self,
-        from_type: str,
-        from_id: Union[int, str],
-        *,
-        to_type: str,
-        to_id: Union[int, str],
-        from_port: Optional[int] = None,
-        from_side: Optional[int] = None,
-        to_port: Optional[int] = None,
-        to_side: Optional[int] = None,
-    ) -> PathReport:
-        s = self.find_vertex(
-            from_type, from_id, port=from_port, side=from_side
-        )
-        t = self.find_vertex(to_type, to_id, port=to_port, side=to_side)
-        if s is None or t is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("between: endpoint not in graph")
-            return r
-        return self.path(s, t)
-
-    def olt_to_customer(
-        self,
-        customer_id: Union[int, str],
-        *,
-        olt_id: Optional[Union[int, str]] = None,
-        olt_port: Optional[int] = None,
-    ) -> PathReport:
-        olt = (
-            self.find_vertex(TYPE_OLT, olt_id, port=olt_port)
-            if olt_id is not None
-            else self.primary_olt()
-        )
-        cust = self.find_vertex(TYPE_CUSTOMER, customer_id)
-        if olt is None or cust is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("olt_to_customer: OLT or customer not in graph")
-            return r
-        return self.path(olt, cust, direction="downstream")
-
-    def customer_to_olt(
-        self,
-        customer_id: Union[int, str],
-        *,
-        olt_id: Optional[Union[int, str]] = None,
-    ) -> PathReport:
-        r = self.olt_to_customer(customer_id, olt_id=olt_id)
-        r.direction = "upstream"
-        r.from_label, r.to_label = r.to_label, r.from_label
-        r.vertex_path = list(reversed(r.vertex_path))
-        r.segments = list(reversed(r.segments))
-        return r
-
-    def olt_to_splitter_out(
-        self,
-        splitter_id: Union[int, str],
-        port: int,
-        *,
-        olt_id: Optional[Union[int, str]] = None,
-        side: int = _SPLITTER_OUT_SIDE,
-    ) -> PathReport:
-        olt = (
-            self.find_vertex(TYPE_OLT, olt_id)
-            if olt_id is not None
-            else self.primary_olt()
-        )
-        sp = self.find_vertex(TYPE_SPLITTER, splitter_id, port=port, side=side)
-        if sp is None:
-            sp = self.find_vertex(TYPE_SPLITTER, splitter_id, port=port)
-        if olt is None or sp is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("olt_to_splitter_out: endpoint missing")
-            return r
-        return self.path(olt, sp, direction="downstream")
-
-    def olt_to_splitter_in(
-        self,
-        splitter_id: Union[int, str],
-        *,
-        olt_id: Optional[Union[int, str]] = None,
-        side: int = _SPLITTER_IN_SIDE,
-        port: int = 1,
-    ) -> PathReport:
-        olt = (
-            self.find_vertex(TYPE_OLT, olt_id)
-            if olt_id is not None
-            else self.primary_olt()
-        )
-        sp = self.find_vertex(TYPE_SPLITTER, splitter_id, side=side, port=port)
-        if sp is None:
-            hits = self.find_vertices(TYPE_SPLITTER, splitter_id, side=side)
-            sp = hits[0] if hits else None
-        if olt is None or sp is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("olt_to_splitter_in: endpoint missing")
-            return r
-        return self.path(olt, sp, direction="downstream")
-
-    def olt_to_cross(
-        self,
-        cross_id: Union[int, str],
-        *,
-        port: Optional[int] = None,
-        side: Optional[int] = None,
-        olt_id: Optional[Union[int, str]] = None,
-    ) -> PathReport:
-        olt = (
-            self.find_vertex(TYPE_OLT, olt_id)
-            if olt_id is not None
-            else self.primary_olt()
-        )
-        cr = self.find_vertex(TYPE_CROSS, cross_id, port=port, side=side)
-        if cr is None:
-            hits = self.find_vertices(TYPE_CROSS, cross_id)
-            cr = hits[0] if hits else None
-        if olt is None or cr is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("olt_to_cross: endpoint missing")
-            return r
-        return self.path(olt, cr, direction="downstream")
-
-    def cross_to_customer(
-        self,
-        cross_id: Union[int, str],
-        customer_id: Union[int, str],
-        *,
-        port: Optional[int] = None,
-        side: Optional[int] = None,
-    ) -> PathReport:
-        return self.between(
-            TYPE_CROSS,
-            cross_id,
-            to_type=TYPE_CUSTOMER,
-            to_id=customer_id,
-            from_port=port,
-            from_side=side,
-        )
-
-    def first_in_node(
-        self,
-        node_id: int,
-        *,
-        from_ref: Optional[VertexRef] = None,
-        prefer_types: Optional[Sequence[str]] = None,
-    ) -> PathReport:
-        start = (
-            self.resolve_vertex(from_ref)
-            if from_ref is not None
-            else self.primary_olt()
-        )
-        if start is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("first_in_node: no start vertex")
-            return r
-
-        candidates = self.find_vertices(node_id=node_id)
-        if prefer_types:
-            preferred = [
-                i
-                for i in candidates
-                if self.g.vs[i]["obj_type"] in prefer_types
-            ]
-            if preferred:
-                candidates = preferred
-
-        best: Optional[PathReport] = None
-        best_len = 10**9
-        for c in candidates:
-            if c == start:
-                continue
-            vpath = self.shortest_path(start, c)
-            if vpath and len(vpath) < best_len:
-                best_len = len(vpath)
-                best = self._report_from_vpath(vpath)
-        if best is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append(f"first_in_node: no vertex in node {node_id}")
-            return r
-        return best
-
-    def from_cross_to_node(
-        self,
-        cross_id: Union[int, str],
-        node_id: int,
-        *,
-        port: Optional[int] = None,
-        side: Optional[int] = None,
-    ) -> PathReport:
-        cr = self.find_vertex(TYPE_CROSS, cross_id, port=port, side=side)
-        if cr is None:
-            hits = self.find_vertices(TYPE_CROSS, cross_id)
-            cr = hits[0] if hits else None
-        if cr is None:
-            r = PathReport(wavelength_nm=self.wavelength)
-            r.warnings.append("from_cross_to_node: cross not in graph")
-            return r
-        return self.first_in_node(node_id, from_ref=cr)
-
-    def budget_summary(
-        self,
-        customer_ids: Optional[Iterable[Union[int, str]]] = None,
-        *,
-        olt_id: Optional[Union[int, str]] = None,
-    ) -> List[PathReport]:
-        if customer_ids is None:
-            customer_ids = [
-                self.g.vs[i]["obj_id"] for i in self.find_customers()
-            ]
-        return [
-            self.olt_to_customer(cid, olt_id=olt_id) for cid in customer_ids
-        ]
-
-    def worst_customer(
-        self,
-        *,
-        olt_id: Optional[Union[int, str]] = None,
-    ) -> Optional[PathReport]:
-        reports = self.budget_summary(olt_id=olt_id)
-        reports = [r for r in reports if r.segments]
-        if not reports:
-            return None
-        return max(reports, key=lambda r: r.total_db)
-
-    def describe_interface(self, ref: VertexRef) -> dict:
-        idx = self.resolve_vertex(ref)
-        if idx is None:
-            return {}
-        a = self._vertex_attrs(idx)
-        return {
-            "index": idx,
-            "obj_type": a.get("obj_type"),
-            "obj_id": a.get("obj_id"),
-            "side": a.get("side"),
-            "port": a.get("port"),
-            "node_id": a.get("node_id"),
-            "splitter_type": a.get("splitter_type"),
-            "name": a.get("name"),
-        }
