@@ -1,16 +1,5 @@
 # simpleworkernet/utils/topology/attenuation/calculator_edge.py
-"""Edge → attenuation segments.
-
-Правила стыков:
-- fiber↔fiber (один кабель, разные side) → потери волокна
-- один сплиттер IN↔OUT → IL сплиттера
-- сплиттер↔сплиттер (разные id) → только сварка (без коннекторов)
-- кросс internal: adapter 0.3 (вход+выход) при cross_loss_mode=adapter
-  или 0 при connectors (коннекторы на внешних рёбрах к кроссу)
-- объект↔кросс: коннектор 0.15 только при cross_loss_mode=connectors
-- вход в OLT / приход к customer|onu|radio|switch → коннектор 0.15
-- стык с волокном (иначе) → сварка
-"""
+"""Edge → attenuation segments."""
 from __future__ import annotations
 from typing import List
 from ..constants import (
@@ -18,6 +7,7 @@ from ..constants import (
     TYPE_RADIO, TYPE_SPLITTER, TYPE_SWITCH,
 )
 from .models import AttenuationSegment
+from .calculator_segments import _obj_display_name, _olt_host
 
 _TERMINAL_CONNECTOR_TYPES = frozenset({
     TYPE_OLT, TYPE_CUSTOMER, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH,
@@ -101,6 +91,18 @@ class AttenuationEdgeMixin:
             return mode
         return "adapter"
 
+    def _terminal_label(self, vattrs: dict) -> str:
+        ot = vattrs.get("obj_type")
+        oid = vattrs.get("obj_id")
+        name = _obj_display_name(vattrs)
+        host = _olt_host(vattrs) if ot == TYPE_OLT else None
+        parts = [f"{ot}:{oid}"]
+        if name:
+            parts.append(name)
+        if host:
+            parts.append(f"host={host}")
+        return " ".join(parts)
+
     def _external_joint_segments(
         self, ua: dict, va: dict, *, connect_id=None,
     ) -> List[AttenuationSegment]:
@@ -111,9 +113,11 @@ class AttenuationEdgeMixin:
 
         if ta == TYPE_SPLITTER and tb == TYPE_SPLITTER and ida != idb:
             db = self.catalog.splice_db(use_max=self.use_max)
+            na = _obj_display_name(ua) or ida
+            nb = _obj_display_name(va) or idb
             return [AttenuationSegment(
                 kind="splice", db=db,
-                description=f"splice splitter:{ida}↔splitter:{idb}",
+                description=f"splice splitter {na} ↔ {nb}",
                 source="default", wavelength_nm=self.wavelength, meta=meta,
             )]
 
@@ -121,14 +125,13 @@ class AttenuationEdgeMixin:
             if self._cross_loss_mode() == "connectors":
                 db = self.catalog.connector_db(use_max=self.use_max)
                 other = ua if tb == TYPE_CROSS else va
+                other_label = self._terminal_label(other)
                 return [AttenuationSegment(
                     kind="connector", db=db,
-                    description=(
-                        f"connector → cross "
-                        f"({other.get('obj_type')}:{other.get('obj_id')})"
-                    ),
+                    description=f"connector → cross ({other_label})",
                     obj_type=TYPE_CROSS,
                     obj_id=ida if ta == TYPE_CROSS else idb,
+                    obj_name=_obj_display_name(other),
                     source="default", wavelength_nm=self.wavelength, meta=meta,
                 )]
             if TYPE_FIBER in kinds:
@@ -143,12 +146,17 @@ class AttenuationEdgeMixin:
         terminal = kinds & _TERMINAL_CONNECTOR_TYPES
         if terminal:
             db = self.catalog.connector_db(use_max=self.use_max)
-            t = next(iter(terminal))
+            tattrs = ua if ta in _TERMINAL_CONNECTOR_TYPES else va
+            label = self._terminal_label(tattrs)
+            host = _olt_host(tattrs) if tattrs.get("obj_type") == TYPE_OLT else None
             return [AttenuationSegment(
                 kind="connector", db=db,
-                description=f"connector at {t}",
-                obj_type=t, source="default",
-                wavelength_nm=self.wavelength, meta=meta,
+                description=f"connector at {label}",
+                obj_type=tattrs.get("obj_type"),
+                obj_id=str(tattrs.get("obj_id")),
+                obj_name=_obj_display_name(tattrs),
+                source="default", wavelength_nm=self.wavelength,
+                meta={**meta, "host": host} if host else meta,
             )]
 
         if TYPE_FIBER in kinds:
@@ -160,8 +168,10 @@ class AttenuationEdgeMixin:
             )]
 
         db = self.catalog.splice_db(use_max=self.use_max)
+        la = self._terminal_label(ua)
+        lb = self._terminal_label(va)
         return [AttenuationSegment(
             kind="splice", db=db,
-            description=f"splice {ta}:{ida}↔{tb}:{idb}",
+            description=f"splice {la} ↔ {lb}",
             source="default", wavelength_nm=self.wavelength, meta=meta,
         )]

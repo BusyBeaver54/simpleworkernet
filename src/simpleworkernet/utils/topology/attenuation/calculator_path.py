@@ -4,7 +4,10 @@ from __future__ import annotations
 from typing import Any, List, Optional
 from ..constants import TYPE_FIBER, TYPE_SPLITTER
 from .models import AttenuationSegment, PathReport
-from .calculator_segments import _label_vertex, _SPLITTER_IN_SIDE, _SPLITTER_OUT_SIDE
+from .calculator_segments import (
+    _label_vertex, _obj_display_name, _olt_host, _cable_name,
+    _SPLITTER_IN_SIDE, _SPLITTER_OUT_SIDE,
+)
 
 
 class AttenuationPathMixin:
@@ -12,23 +15,45 @@ class AttenuationPathMixin:
         fiber_id = fiber_vertex_attrs.get("obj_id")
         length_m = fiber_vertex_attrs.get("length_m")
         length_source = fiber_vertex_attrs.get("length_source") or "unknown"
-        cable_name = fiber_vertex_attrs.get("cable_name")
+        cable_name = None
+        if hasattr(self, "_resolve_cable_name"):
+            cable_name = self._resolve_cable_name(fiber_vertex_attrs)
+        if not cable_name:
+            cable_name = _cable_name(fiber_vertex_attrs) or fiber_vertex_attrs.get("cable_name")
+
         if length_m is None and self.cache is not None and self.client is not None:
             try:
                 length_m, length_source = self._fiber_length_m(fiber_id)
             except Exception:
-                length_m, length_source = None, "missing"
+                try:
+                    length_m, length_source = self._fiber_length(
+                        fiber_id, fiber_vertex_attrs.get("api_obj")
+                    )
+                except Exception:
+                    length_m, length_source = None, "missing"
+
         db_km, src = self.catalog.fiber_db_per_km(
-            cable_name=cable_name,
             wavelength_nm=self.wavelength,
             use_max=self.use_max,
         )
+        # предпочтительно по имени кабеля
+        try:
+            if cable_name and hasattr(self.catalog, "cable_db_per_km"):
+                db_km = self.catalog.cable_db_per_km(
+                    name=cable_name, wavelength_nm=self.wavelength, use_max=self.use_max,
+                )
+                src = "cable"
+        except Exception:
+            pass
+
+        name_part = f" {cable_name}" if cable_name else ""
         if length_m is None:
             return [
                 AttenuationSegment(
                     kind="fiber", db=0.0,
-                    description=f"fiber:{fiber_id} length unknown",
+                    description=f"fiber:{fiber_id}{name_part} length unknown",
                     obj_type=TYPE_FIBER, obj_id=str(fiber_id),
+                    obj_name=cable_name,
                     wavelength_nm=self.wavelength, source=src,
                     length_source=length_source,
                     meta={"cable_name": cable_name},
@@ -39,9 +64,11 @@ class AttenuationPathMixin:
             AttenuationSegment(
                 kind="fiber", db=db,
                 description=(
-                    f"fiber:{fiber_id} {length_m:.1f}m × {db_km:.3f} dB/km"
+                    f"fiber:{fiber_id}{name_part} "
+                    f"{length_m:.1f}m × {db_km:.3f} dB/km"
                 ),
                 obj_type=TYPE_FIBER, obj_id=str(fiber_id),
+                obj_name=cable_name,
                 length_m=float(length_m), length_source=length_source,
                 wavelength_nm=self.wavelength, source=src,
                 meta={"cable_name": cable_name, "db_per_km": db_km},
@@ -49,11 +76,10 @@ class AttenuationPathMixin:
         ]
 
     def _splitter_port_name(self, splitter_obj, port: int) -> Optional[str]:
-        """Имя порта из API-объекта, если есть."""
         if splitter_obj is None or not port:
             return None
         for attr in ("ports", "port_list", "ifaces", "out_ports"):
-            ports = getattr(splitter_obj, attr, None)
+            ports = getattr(splitter_obj, attr, None) if not isinstance(splitter_obj, dict) else splitter_obj.get(attr)
             if not ports:
                 continue
             if isinstance(ports, dict):
@@ -75,37 +101,35 @@ class AttenuationPathMixin:
         return None
 
     def _splitter_segments(
-        self,
-        splitter_vertex_attrs: dict,
-        *,
-        direction: str = "unknown",
-        edge_side=None,
+        self, splitter_vertex_attrs: dict, *,
+        direction: str = "unknown", edge_side=None,
     ) -> List[AttenuationSegment]:
         splitter_id = splitter_vertex_attrs.get("obj_id")
         side = int(splitter_vertex_attrs.get("side") or edge_side or 0)
         port = int(splitter_vertex_attrs.get("port") or 0)
         splitter_obj = splitter_vertex_attrs.get("api_obj")
         catalog_id = self._splitter_catalog_id(splitter_obj)
-        pin = getattr(splitter_obj, "port_count_in", None) if splitter_obj else None
-        pout = getattr(splitter_obj, "port_count_out", None) if splitter_obj else None
+        pout = None
+        if splitter_obj is not None:
+            pout = getattr(splitter_obj, "port_count_out", None) if not isinstance(splitter_obj, dict) else splitter_obj.get("port_count_out")
         topology = None
         if splitter_obj is not None:
-            topology = (
-                getattr(splitter_obj, "topology_type", None)
-                or getattr(splitter_obj, "topology", None)
-            )
+            if isinstance(splitter_obj, dict):
+                topology = splitter_obj.get("topology_type") or splitter_obj.get("topology")
+            else:
+                topology = (
+                    getattr(splitter_obj, "topology_type", None)
+                    or getattr(splitter_obj, "topology", None)
+                )
         if not topology:
             topology = splitter_vertex_attrs.get("splitter_type")
 
-        # Имя сплиттера — основной ключ поиска в каталоге
-        name = None
-        if splitter_obj is not None:
-            name = (
-                getattr(splitter_obj, "name", None)
-                or getattr(splitter_obj, "title", None)
-            )
-        if not name:
-            name = splitter_vertex_attrs.get("name") or splitter_vertex_attrs.get("title")
+        name = _obj_display_name(splitter_vertex_attrs)
+        if not name and splitter_obj is not None:
+            if isinstance(splitter_obj, dict):
+                name = splitter_obj.get("name") or splitter_obj.get("title")
+            else:
+                name = getattr(splitter_obj, "name", None) or getattr(splitter_obj, "title", None)
 
         port_name = self._splitter_port_name(splitter_obj, port)
         if not port_name:
@@ -119,7 +143,7 @@ class AttenuationPathMixin:
         db, source = self.catalog.splitter_port_db(
             splitter_id=splitter_id,
             catalog_id=catalog_id,
-            catalog_name=name,  # поиск по name в первую очередь внутри resolve
+            catalog_name=name,
             ratio_key=ratio_key,
             topology_type=topology,
             port=port if port else None,

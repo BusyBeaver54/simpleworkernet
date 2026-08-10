@@ -7,9 +7,11 @@ from .catalog_resolve import CatalogResolveMixin
 from .catalog_merge import CatalogMergeMixin
 from .catalog_fill import CatalogFillMixin
 from .catalog_force import CatalogForceMixin
+from .catalog_io import CatalogIOMixin
 from .catalog_helpers import guess_ratio_key
 
 __all__ = ["AttenuationCatalog", "guess_ratio_key"]
+
 
 class AttenuationCatalog(
     CatalogCoreMixin,
@@ -18,6 +20,7 @@ class AttenuationCatalog(
     CatalogMergeMixin,
     CatalogFillMixin,
     CatalogForceMixin,
+    CatalogIOMixin,
 ):
-    """force(id) → topology → catalog_id → catalog_name → ratio → estimated."""
+    """force(id) → name → instance → catalog → ratio → estimated."""
     pass
