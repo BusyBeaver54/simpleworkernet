@@ -1,15 +1,25 @@
 # Оптические затухания
 
-Модуль считает вносимое затухание вдоль пути коммутации (волокно, сплиттеры, сварки, коннекторы, адаптеры кросса).
+Модуль считает **вносимое затухание** вдоль пути коммутации: волокно, сплиттеры, сварки, коннекторы, адаптеры кросса.
+
+Для каждого сегмента и для всего пути сразу считаются три значения:
+
+| Поле | Смысл |
+|------|--------|
+| **calc** (`db` / `total_db`) | номинал (типичное значение) |
+| **min** (`db_min` / `total_db_min`) | нижняя оценка |
+| **max** (`db_max` / `total_db_max`) | верхняя оценка |
 
 ```python
 from simpleworkernet.utils.topology.attenuation import (
     Attenuation, AttenuationError,
-    AttenuationCatalog, PathReport, MultiPathReport,
+    AttenuationCatalog, PathReport, MultiPathReport, EndpointInfo,
     generate_template, update_template, load_attenuation_catalog,
     save_path_report, load_path_report,
+    attenuation_json_path, client_file_key,
+    PairPlan, pair_plan, validate_pair_inputs, guess_ratio_key,
 )
-# или
+# или:
 from simpleworkernet.utils.topology import Attenuation, PathReport, MultiPathReport
 ```
 
@@ -17,59 +27,65 @@ from simpleworkernet.utils.topology import Attenuation, PathReport, MultiPathRep
 
 ## 1. Рабочий процесс (обязательно)
 
-1. **Сгенерировать JSON-каталог** из дефолтов пакета + объектов БД.
+1. **Сгенерировать JSON-каталог** из дефолтов пакета + объектов БД (`generate_template`).
 2. **Проверить** значения (особенно сплиттеры и кабели), поправить вручную.
 3. При появлении новых объектов в БД — **`update_template`** (не затирает ручные правки).
 4. Считать затухания через **`Attenuation.calculate(...)`**.
 
-Файл каталога (на хост):
+Файл каталога (на хост API):
 
 ```text
 ~/.config/simpleworkernet/attenuation_<hostname>.json
 ```
 
 ```python
-from simpleworkernet import WorkerNetClient
 from simpleworkernet.utils.topology.attenuation import (
-    generate_template, update_template, load_attenuation_catalog,
+    generate_template, update_template, load_attenuation_catalog, attenuation_json_path,
 )
 
-client = WorkerNetClient(...)
+print(attenuation_json_path(client))
 
-# первый раз — создать файл
 cat = generate_template(
     client,
     splitter_catalog_names=("PLC", "FBT"),  # обязательно: имена каталогов в БД
-    cache=None,
-    overwrite=False,  # если файл есть → update_template
+    overwrite=False,
 )
-
-# позже — дописать новые сплиттеры/кабели из БД
 cat = update_template(client, splitter_catalog_names=("PLC", "FBT"))
-
-# загрузка при расчёте (делается и автоматически)
 cat = load_attenuation_catalog(client)
 ```
 
-`splitter_catalog_names` — **обязательный** параметр: имена каталогов сплиттеров в WorkerNet (как в БД).
+`splitter_catalog_names` — **обязательный** параметр: имена каталогов сплиттеров в WorkerNet.
 
 ---
 
 ## 2. Структура JSON-каталога
 
+Значения — число или словарь min/calc/max:
+
+```json
+{ "db_min": 0.17, "db": 0.19, "db_max": 0.22 }
+```
+
+Если только `db` + `db_max`, то `db_min = db`. Одно число — все три равны.
+
 ```json
 {
   "defaults": {
-    "fiber_db_per_km": { "1310": {"db": 0.34, "db_max": 0.4}, "1490": {...}, "1550": {...} },
-    "splice_db": {"db": 0.05, "db_max": 0.1},
-    "connector_db": {"db": 0.15, "db_max": 0.3},
-    "adapter_db": {"db": 0.3, "db_max": 0.5},
+    "fiber_db_per_km": {
+      "1310": { "db_min": 0.32, "db": 0.34, "db_max": 0.40 },
+      "1490": { "db": 0.23, "db_max": 0.26 },
+      "1550": { "db": 0.19, "db_max": 0.22 }
+    },
+    "splice_db": { "db": 0.05, "db_max": 0.10 },
+    "connector_db": { "db": 0.15, "db_max": 0.30 },
+    "adapter_db": { "db": 0.30, "db_max": 0.50 },
     "cross_loss_mode": "adapter",
     "geo_slack_k": 1.03,
     "splitter_excess_db": 0.5
   },
   "cables": [
-    { "id": "12", "name": "ОКС-16", "db_per_km": { "1550": {"db": 0.19, "db_max": 0.22} } }
+    { "id": "12", "name": "ОКС-16",
+      "db_per_km": { "1550": { "db_min": 0.17, "db": 0.19, "db_max": 0.22 } } }
   ],
   "splitters": [
     {
@@ -77,293 +93,230 @@ cat = load_attenuation_catalog(client)
       "name": "FBT 1x2 50/50",
       "ratio": "1x2_50/50",
       "ports": {
-        "1": { "name": "50%", "attenuation": { "1490": {"db": 3.61, "db_max": 4.31} } },
-        "2": { "name": "50%", "attenuation": { "1490": {"db": 3.61, "db_max": 4.31} } }
+        "1": { "name": "50%", "attenuation": {
+          "1490": { "db": 3.61, "db_max": 4.31 },
+          "1550": { "db": 3.51, "db_max": 4.21 }
+        }},
+        "2": { "name": "50%", "attenuation": {
+          "1550": { "db": 3.51, "db_max": 4.21 }
+        }}
       }
     }
   ],
-  "cross_adapters": { "default": {"db": 0.3, "db_max": 0.5} },
-  "force": { "splitters": {}, "edges": {} }
+  "cross_adapters": { "default": { "db": 0.3, "db_max": 0.5 } },
+  "force": {
+    "splitters": { "42": { "1": { "db": 3.2, "db_max": 3.5 }, "all": 3.4 } },
+    "edges": { "connect-uuid-1": 0.08 }
+  }
 }
 ```
 
-### Откуда берутся значения (приоритет)
+### Приоритет порта сплиттера
 
-| Приоритет | Источник | `source` в сегменте |
-|-----------|----------|---------------------|
-| 1 | `force.splitters[id]` / `force.edges` | `force` |
-| 2 | запись в `splitters[]` по **имени** | `name` |
-| 3 | запись по instance id | `instance` |
-| 4 | запись по `catalog_id` | `catalog` |
-| 5 | `ratio_defaults` / угаданный ratio | `ratio:1x2_50/50` |
-| 6 | оценка `10·log10(N) + excess` | `estimated` |
+1. `force.splitters[<id>]`
+2. JSON по **имени** (`prefer_name=True`)
+3. по instance id / `catalog_id`
+4. `ratio_defaults` из package `defaults.json`
+5. оценка `10·log10(N) + splitter_excess_db` → `source=estimated`
 
-Для кабеля: имя из модели → `cables[]` → `defaults.fiber_db_per_km`.
+Длина волны: точное совпадение, иначе **ближайшая** (лог).  
+Порт — по номеру или имени (`"50%"`, `"all"`).
 
-### Длина волны
+### `cross_loss_mode`
 
-В `calculate(wavelength=1490)` берётся карта затуханий на этой λ.  
-Если точной нет — **ближайшая** указанная + сообщение в `log.info`.
-
-### Порт сплиттера
-
-- По номеру: `ports["2"]`.
-- Имя порта (`port_name`) берётся из JSON: `ports["2"]["name"]` (например `"50%"`).
-- Если номера нет — ключ `"all"` (равномерные PLC).
-
-### Кросс / коннекторы
-
-- `cross_loss_mode: "adapter"` — один раз `adapter_db` (вход+выход кросса).
-- `"connectors"` — по `connector_db` на каждое ребро к кроссу.
-- Сплиттер↔сплиттер (разные id) — только сварка, без коннекторов.
-- OLT / абонент — `connector_db` (0.15 по умолчанию).
-
-Меняйте значения в **своём** JSON (`defaults.adapter_db` и т.д.) — при расчёте читается он, не пакетные дефолты.
+| Режим | Смысл |
+|-------|--------|
+| `"adapter"` (default) | внутреннее ребро кросса → сегмент `adapter` |
+| `"connectors"` | коннекторы на терминалах |
 
 ---
 
-## 3. Создание `Attenuation`
+## 3. Инициализация `Attenuation`
 
 ```python
-from simpleworkernet.utils.topology.attenuation import Attenuation
-
-# каталог подтянется из ~/.config/.../attenuation_<host>.json при наличии client
-att = Attenuation(
-    cgraph=None,          # готовый CGraph или None (построится в calculate)
-    catalog=None,         # AttenuationCatalog или None → load / defaults
-    client=client,
-    cache=cache,          # DataCache топологии, желательно
-    wavelength=1490,      # дефолтная λ
-    use_max=False,        # True → db_max
+Attenuation(
+    cgraph=None,       # CGraph | list[CGraph] | NetworkTopology
+    *,
+    topology=None,     # явно NetworkTopology (приоритет)
+    catalog=None,
+    wavelength=1550,
+    cache=None,
+    client=None,
+    use_max=False,
 )
 ```
 
+```python
+att = Attenuation(cgraph=cg, wavelength=1490)
+att = Attenuation(cgraph=[cg1, cg2], client=client)
+att = Attenuation(topology=nt, wavelength=1490)
+att = Attenuation(cgraph=nt)  # duck-type по .cgraphs
+att = Attenuation(client=client, cache=cache, wavelength=1490)
+```
+
+При нескольких CGraph:
+
+- `calculate(obj1, …)` — граф, где есть объекты (предпочтение: оба конца);
+- `calculate()` — **все** cgraph → `MultiPathReport`.
+
 ---
 
-## 4. `calculate` — три режима
-
-### 4.1. Весь CGraph (без точек)
-
-Если при создании передан `cgraph`, можно не указывать объекты:
-
-```python
-from simpleworkernet.utils.topology import NetworkTopology, Attenuation
-
-nt = NetworkTopology(client)
-nt.build_from_customer(17711)
-cg = nt.cgraphs[0]
-
-att = Attenuation(cgraph=cg, client=client, wavelength=1490)
-res = att.calculate()   # PathReport или MultiPathReport
-print(res.to_table())
-```
-
-Ищутся пути customer → olt/switch/onu/radio (или листья графа).  
-Одна ветвь → `PathReport`, несколько → `MultiPathReport`.
-
-**Без CGraph и без obj1** → `AttenuationError`.
-
-### 4.2. От одной точки (obj2 не обязателен)
-
-```python
-# абонент → ближайший/все OLT в построенном графе
-res = att.calculate("customer", 17711, wavelength=1490)
-
-# OLT → абоненты/ветви
-res = att.calculate("olt", 11808, obj1_port=11, wavelength=1490)
-```
-
-Для `customer` / `olt` / `switch` **side и port не обязательны**.
-
-### 4.3. Между двумя объектами
+## 4. `calculate(...)`
 
 ```python
 res = att.calculate(
-    obj1_type, obj1_id,
-    obj2_type, obj2_id,
-    wavelength=1490,
+    obj1_type=None, obj1_id=None,
+    obj2_type=None, obj2_id=None,
+    *,
+    wavelength=None,
     obj1_side=None, obj1_port=None,
     obj2_side=None, obj2_port=None,
-    direction=None,   # "downstream" / "upstream" / None (авто)
-    use_max=False,
+    direction=None,
+    use_max=None,
     max_paths=50,
 )
+# → PathReport | MultiPathReport
 ```
 
-Если CGraph не передан — строится по стратегии пары типов (см. ниже).
+| Вызов | Поведение |
+|-------|-----------|
+| `calculate("customer", 17711, "olt", 11808, obj2_port=3)` | путь между объектами |
+| `calculate("customer", 17711)` | obj2 авто (OLT/switch/…) |
+| `calculate()` при cgraph/topology | все пути customer→olt |
+| `calculate()` без графа и obj1 | `AttenuationError` |
 
----
+Для **fiber** укажите `port` (номер ОВ) хотя бы с одной стороны.
 
-## 5. Как задавать объекты
+### Как задавать объекты
 
-| Тип | `obj*_type` | id | side | port |
-|-----|-------------|-----|------|------|
-| Абонент | `"customer"` | int | не нужен | не нужен |
-| OLT | `"olt"` | int | не нужен | желателен (порт GPON) |
-| Switch / ONU / Radio | `"switch"` / `"onu"` / `"radio"` | int | не нужен | по ситуации |
-| Сплиттер | `"splitter"` | int | 1=вход, 2=выход | номер порта |
-| CWDM | `"cwdm"` | int | сторона | порт |
-| Кросс | `"cross"` | **uuid** (str) | 1/2 | порт |
-| Волокно/кабель | `"fiber"` | int (id кабеля) | 1/2 сторона узла | **номер ОВ** |
-
-### Примеры
+| Тип | side | port |
+|-----|------|------|
+| customer / olt / switch / onu / radio | обычно не нужны | порт OLT желателен |
+| splitter / cwdm | 1=вход, 2=выход | номер порта |
+| cross | 1/2 | порт (uuid в id) |
+| fiber | сторона узла | **номер ОВ** |
 
 ```python
-# Абонент → OLT
-res = att.calculate(
-    "customer", 17711,
-    "olt", 11808,
-    obj2_port=11,
-    wavelength=1490,
-)
-
-# OLT → абонент (явные порты)
-res = att.calculate(
-    "olt", 11808, "customer", 17711,
-    obj1_port=11,
-    wavelength=1490,
-)
-
-# Участок между двумя кабелями (коридор по FNGraph)
+res = att.calculate("customer", 17711, "olt", 11808, obj2_port=11, wavelength=1490)
 res = att.calculate(
     "fiber", 13259, "fiber", 13235,
-    obj1_side=2, obj1_port=1,   # side = сторона сооружения, port = ОВ
-    obj2_side=2, obj2_port=1,
-    wavelength=1490,
+    obj1_side=2, obj1_port=1, obj2_side=2, obj2_port=1,
 )
-# Для fiber↔fiber port обязателен хотя бы у одного конца.
-
-# От сплиттера
-res = att.calculate(
-    "splitter", 16926, "customer", 17711,
-    obj1_side=2, obj1_port=4,
-    wavelength=1490,
-)
-
-# От кросса
-res = att.calculate(
-    "cross", "8a23d025-940e-4a54-884f-2d305e873f12",
-    "customer", 17711,
-    obj1_side=1, obj1_port=4,
-    wavelength=1490,
-)
-```
-
----
-
-## 6. Логика построения CGraph внутри calculate
-
-Если `self.g` уже содержит оба объекта — перестройки нет.
-
-Иначе (нужен `client`):
-
-| Пара типов | Стратегия |
-|------------|-----------|
-| fiber ↔ fiber | FNGraph-коридор: узлы кабелей → included/excluded fibers → CGraph |
-| olt → customer | build от OLT |
-| customer → olt/switch | build от устройства (или от customer) |
-| splitter/cwdm ↔ customer | от сплиттера/CWDM |
-| с участием cross | от любого конца, merge при необходимости |
-| только obj1 | build от obj1, цели — терминалы в графе |
-
-Фильтры `included_fibers` / `excluded_fibers` для fiber-коридора выставляются автоматически.
-
-Недостаточно данных (например fiber без port) → `AttenuationError` с понятным текстом.
-
----
-
-## 7. Результат: PathReport и MultiPathReport
-
-### PathReport (один путь)
-
-```python
-print(res.total_db)
+print(res.total_db, res.total_db_min, res.total_db_max)
 print(res.to_table())
-print(res.by_kind())          # {'fiber': ..., 'splitter': ..., 'adapter': ...}
-print(res.fiber_db, res.splitter_db, res.joint_db)
-print(res.fiber_length_m)
-
-for s in res.segments:
-    print(s.kind, s.db, s.obj_name, s.port, s.port_name, s.source)
-
-# сериализация
-from simpleworkernet.utils.topology.attenuation import save_path_report, load_path_report
-save_path_report(res, "report.json")
-res2 = load_path_report("report.json")
-# или
-res.save("report.json")
-res2 = PathReport.load("report.json")
 ```
 
-Сегменты:
+Если `self.g` уже содержит объекты — перестройки нет. Иначе (нужен `client`) строится CGraph по стратегии пары типов (fiber↔fiber через FNGraph-коридор, olt↔customer от устройства и т.д.).
 
-| kind | Смысл |
-|------|--------|
-| `fiber` | кабель, dB = L_km × dB/km |
-| `splitter` | IL порта сплиттера |
-| `splice` | сварка |
-| `adapter` | адаптер кросса (вход+выход) |
-| `connector` | коннектор (OLT, абонент, режим connectors) |
-| `force` | ручное значение из JSON |
+---
 
-В `description` / `obj_name` / `port_name` / `meta.host` — имена из **моделей API** и JSON-каталога (не `str(Interface)`).
+## 5. Отчёты
 
-### MultiPathReport (несколько ветвей)
+### `EndpointInfo`
+
+| Поле | Описание |
+|------|----------|
+| `obj_type`, `obj_id` | тип и id |
+| `obj_name` | имя |
+| `side`, `port` | сторона и порт |
+| `port_name` | имя порта (PON0, «50%») |
+| `host` | host/IP для olt/switch/onu/radio |
+| `commutation_index` | индекс коммутации у абонента |
+
+`format_sp()` → `"s1p0"`.  
+`format_header()` → `"olt:11808 s0p3 host=10.1.2.3 name=OLT-Main port=PON0"`.
+
+### `AttenuationSegment`
+
+`kind`: fiber / splitter / splice / connector / adapter / force.  
+`db`, `db_min`, `db_max`; для fiber — `length_m`, `length_source` (`opticalen` / `geo` / `cache` / `missing`).  
+`source`: default / cable / name / ratio:… / force / estimated.
+
+### `PathReport`
+
+- `total_db`, `total_db_min`, `total_db_max`
+- `from_endpoint`, `to_endpoint`, `device_endpoint`, `customer_endpoint`
+- `by_kind()`, `fiber_length_m`, `fiber_db`, `splitter_db`, `joint_db`
+- `to_table()`, `save()` / `load()`, `to_dict()` / `from_dict()`
+
+Пример `to_table()`:
+
+```text
+Path  λ=1490 nm  calc=12.345  min=11.200  max=13.800 dB (fiber=1.2, splitter=10.5, joints=0.6)
+  customer: customer:17711 s1p0 name=Иванов commutation=0
+  olt: olt:11808 s0p3 host=10.1.2.3 name=OLT-Main port=PON0
+------------------------------------------------------------------------
+  1. fiber       0.234 dB  ... [fiber:42, name=ОКС-16, s0p1, L=1200.0m, Lsrc=opticalen, min=..., max=..., src=cable]
+  ...
+```
+
+Оборудование: приоритет **olt → switch → onu → radio**.
+
+### `MultiPathReport`
+
+- `branches`, `count`, `total_db`/`avg`, `total_db_min`, `total_db_max`
+- `branch_for(obj_type, obj_id)`
+- `to_table()`, **`save(path)` / `load(path)`**
 
 ```python
-if isinstance(res, MultiPathReport):
-    print(res.count, res.total_db_min, res.total_db_max, res.total_db_avg)
-    print(res.to_table())
-    for b in res.branches:
-        print(b.from_label, "→", b.to_label, b.total_db)
-    branch = res.branch_for("customer", 17711)
+res.save("/tmp/multi.json")
+loaded = MultiPathReport.load("/tmp/multi.json")
 ```
 
-Появляется при ветвлении на сплиттерах/CWDM или при нескольких путях между объектами.
+---
+
+## 6. Длина волокна (`length_source`)
+
+| Источник | Откуда |
+|----------|--------|
+| `opticalen` | оптическая длина из модели fiber |
+| `geo` / `geo_api` | геометрия × `geo_slack_k` |
+| `cache` | DataCache |
+| `missing` / `unknown` | длина неизвестна → db=0 + warning |
+
+---
+
+## 7. Алгоритм сегментов
+
+По vertex-path:
+
+1. fiber↔fiber (разные side, тот же id) → `fiber` (длина × dB/km triple)
+2. splitter↔splitter (тот же id) → `splitter` (`splitter_port_db_triple`)
+3. внутренний cross → `adapter` (`cross_loss_mode`)
+4. внешние стыки → `splice` / `connector`
+5. force по `connect_id` → `force`
+
+Суммы min/calc/max по сегментам → `total_db_*`.
 
 ---
 
 ## 8. Связь с NetworkTopology
 
 ```python
-from simpleworkernet.utils.topology import NetworkTopology, Attenuation
+nt = NetworkTopology(client, cache=DataCache())
+nt.build_from_device("olt", 11808, port="1-8")
 
-nt = NetworkTopology(client)
-nt.build_from_device("olt", 11808, port=11)
-# или
-nt.build_from_customer(17711)
-
-att = Attenuation(cgraph=nt.cgraphs[0], client=client, cache=nt.cache, wavelength=1490)
-
-# по уже построенному графу
+att = Attenuation(topology=nt, wavelength=1490)
 res = att.calculate()
-# или уточнить концы
-res = att.calculate("customer", 17711, "olt", 11808, wavelength=1490)
+res = att.calculate("customer", 17711, "olt", 11808, obj2_port=3)
+
+linear = nt.get_linear("customer", 17711, "olt", 11808)
+att2 = Attenuation(topology=linear, wavelength=1490)
 ```
 
-Линейный кусок:
-
-```python
-linear_nt = nt.get_linear("customer", 17711, "olt", 11808)
-att = Attenuation(cgraph=linear_nt.cgraphs[0], client=client, wavelength=1490)
-res = att.calculate()
-```
-
-Подробнее про построение графов — [topology.md](topology.md).
+См. [topology.md](topology.md).
 
 ---
 
 ## 9. Типичные ошибки
 
-| Ошибка | Причина / что сделать |
-|--------|------------------------|
-| `не указаны объекты и CGraph не задан` | Передать `cgraph=` или `obj1_type/id` |
-| `для fiber укажите port` | Номер ОВ хотя бы с одной стороны |
-| `объект не найден в графе` | Проверить id/side/port или построить граф вручную |
-| `нет пути в CGraph` | Объекты в разных компонентах; проверить коммутацию |
-| `src=estimated` у сплиттера | Нет записи в JSON — добавить имя/ports или `update_template` |
-| `src=ratio:...` | Имя есть, но ports в JSON пусты → взяты ratio_defaults |
-| adapter всегда 0.2 | Править `defaults.adapter_db` в **пользовательском** JSON |
+| Ошибка | Что сделать |
+|--------|-------------|
+| `не указаны объекты и CGraph не задан` | `cgraph=` / `topology=` или obj1 |
+| `для fiber укажите port` | номер ОВ |
+| `нет пути в CGraph` | проверить коммутацию / компоненты |
+| `src=estimated` | добавить сплиттер в JSON / `update_template` |
+| `src=ratio:…` | ports пусты → ratio_defaults |
 
 ---
 
@@ -371,37 +324,29 @@ res = att.calculate()
 
 ```python
 from simpleworkernet import WorkerNetClient
-from simpleworkernet.utils.topology import NetworkTopology, DataCache
+from simpleworkernet.utils.topology import NetworkTopology, DataCache, Attenuation
 from simpleworkernet.utils.topology.attenuation import (
-    Attenuation, generate_template, update_template, PathReport, MultiPathReport,
+    generate_template, update_template, MultiPathReport,
 )
 
-client = WorkerNetClient(base_url="https://wn.example", token="...")
+client = WorkerNetClient(...)
 cache = DataCache()
 
-# каталог затуханий (один раз / периодически)
 generate_template(client, splitter_catalog_names=("PLC", "FBT"), cache=cache)
-# …правка JSON…
 update_template(client, splitter_catalog_names=("PLC", "FBT"), cache=cache)
 
-# вариант A: от абонента до OLT
 att = Attenuation(client=client, cache=cache, wavelength=1490)
-res = att.calculate(
-    "customer", 17711,
-    "olt", 11808,
-    obj2_port=11,
-    wavelength=1490,
-)
+res = att.calculate("customer", 17711, "olt", 11808, obj2_port=11)
 print(res.to_table())
 res.save("/tmp/att_17711.json")
 
-# вариант B: сначала топология, потом весь граф
 nt = NetworkTopology(client, cache=cache)
 nt.build_from_customer(17711)
-att = Attenuation(cgraph=nt.cgraphs[0], client=client, cache=cache, wavelength=1490)
+att = Attenuation(topology=nt, wavelength=1490)
 res = att.calculate()
 if isinstance(res, MultiPathReport):
-    print("ветвей:", res.count, "min/max:", res.total_db_min, res.total_db_max)
+    print(res.count, res.total_db_avg, res.total_db_min, res.total_db_max)
+    res.save("/tmp/multi.json")
 else:
     print(res.to_table())
 ```
