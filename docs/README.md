@@ -9,9 +9,11 @@
 | [Логирование](logging.md) | stdlib logging |
 | [Кэш и каталоги данных](cache-and-data.md) | SmartDataCache, XDG/AppData пути |
 | [Координаты](coordinates.md) | GeoPoint, проекции, legacy AUTOCAD |
-| [Топология](topology.md) | CGraph, FNGraph, Topology |
-| [Затухания](attenuation.md) | Attenuation, каталог, PathReport |
+| [Топология](topology.md) | NetworkTopology, CGraph, FNGraph, port, get_linear |
+| [Затухания](attenuation.md) | Attenuation, каталог JSON, PathReport, MultiPathReport |
 | [Графика](graphics.md) | SVG / PNG |
 | [Очистка](cleanup.md) | CLI `cleanup-simpleworkernet` |
 | [Тесты](testing.md) | unit / integration |
-| [Структура пакета](package-structure.md) | дерево модулей, публичный API |
+| [Структура пакета](package-structure.md) | дерево исходников, публичный API |
+
+Полный индекс: [docs/](https://github.com/busy4beaver/simpleworkernet/tree/main/docs)
