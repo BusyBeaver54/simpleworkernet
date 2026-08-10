@@ -2,7 +2,7 @@
 
 Python-клиент для REST API [WorkerNet](https://workernet.ru) с типизацией ответов, SmartData и графовой топологией сети.
 
-[![Tag](https://img.shields.io/github/v/tag/busy4beaver/simpleworkernet?color=00c2e8)](https://pypi.org/project/simpleworkernet/)
+[![Tag](https://img.shields.io/github/v/tag/busy4beaver/simpleworkernet?color=00c2e8)](https://github.com/busy4beaver/simpleworkernet/tags)
 [![Supported Python versions](https://img.shields.io/badge/python-3.12%2B-blue?logo=python&logoColor=FFE873)](https://www.python.org/downloads/)
 [![PyPI - Version](https://img.shields.io/pypi/v/simpleworkernet)](https://pypi.org/project/simpleworkernet/)
 [![Downloads](https://static.pepy.tech/badge/simpleworkernet)](https://pepy.tech/project/simpleworkernet)
@@ -91,7 +91,3 @@ with WorkerNetClient("my.workernet.ru", "your-api-key") as client:
 [![Boosty](https://img.shields.io/badge/Boosty-donate-orange.svg)](https://boosty.to/busybeaver/donate)
 
 ---
-
-## Лицензия
-
-MIT
