@@ -7,7 +7,7 @@ from ...constants import (
     DEVICE_TYPES, SIDE_TYPES, TERMINAL_TYPES, ALL_OBJECT_TYPES,
 )
 from .catalog import AttenuationCatalog, guess_ratio_key
-from .models import AttenuationSegment, PathReport
+from .models import AttenuationSegment, EndpointInfo, PathReport
 from .multipath import MultiPathReport
 from .calculator import Attenuation, AttenuationError
 from .template import (
@@ -24,7 +24,7 @@ __all__ = [
     "TYPE_SWITCH", "TYPE_OLT", "TYPE_ONU", "TYPE_RADIO",
     "DEVICE_TYPES", "SIDE_TYPES", "TERMINAL_TYPES", "ALL_OBJECT_TYPES",
     "Attenuation", "AttenuationError", "AttenuationCatalog",
-    "AttenuationSegment", "PathReport", "MultiPathReport",
+    "AttenuationSegment", "EndpointInfo", "PathReport", "MultiPathReport",
     "PairPlan", "pair_plan", "validate_pair_inputs", "guess_ratio_key",
     "attenuation_json_path", "client_file_key", "generate_template",
     "load_attenuation_catalog", "update_template",
