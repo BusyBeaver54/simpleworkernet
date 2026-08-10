@@ -2,7 +2,10 @@
 """Path report assembly for Attenuation."""
 from __future__ import annotations
 from typing import Any, List, Optional
-from ..constants import TYPE_CUSTOMER, TYPE_FIBER, TYPE_OLT, TYPE_SPLITTER
+from ..constants import (
+    TYPE_CUSTOMER, TYPE_FIBER, TYPE_OLT, TYPE_SPLITTER,
+    TYPE_SWITCH, TYPE_ONU, TYPE_RADIO,
+)
 from .models import AttenuationSegment, EndpointInfo, PathReport
 from .calculator_segments import (
     _label_vertex, _obj_display_name, _olt_host, _cable_name, _attr,
@@ -207,7 +210,8 @@ class AttenuationPathMixin:
         except (TypeError, ValueError):
             port_i = None
         name = _obj_display_name(va)
-        host = _olt_host(va) if ot == TYPE_OLT else None
+        _dev = {TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO}
+        host = _olt_host(va) if ot in _dev else None
         port_name = va.get("port_name")
         obj = va.get("api_obj")
         if port_name is None and obj is not None and port_i is not None:
@@ -295,14 +299,17 @@ class AttenuationPathMixin:
                 missing.append(f"fiber length:{s.obj_id}")
         from_ep = self._endpoint_from_vertex(vpath[0])
         to_ep = self._endpoint_from_vertex(vpath[-1])
-        from ..constants import TYPE_CUSTOMER, TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO
-        _dev = {TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO}
         device_ep = customer_ep = None
         for ep in (from_ep, to_ep):
-            if ep.obj_type in _dev and device_ep is None:
-                device_ep = ep
             if ep.obj_type == TYPE_CUSTOMER and customer_ep is None:
                 customer_ep = ep
+        for prefer in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO):
+            for ep in (from_ep, to_ep):
+                if ep.obj_type == prefer:
+                    device_ep = ep
+                    break
+            if device_ep is not None:
+                break
         return PathReport(
             total_db=total, total_db_min=total_min, total_db_max=total_max,
             wavelength_nm=self.wavelength, segments=segs,
