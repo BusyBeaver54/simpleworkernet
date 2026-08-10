@@ -57,22 +57,27 @@ class EndpointInfo:
             meta=dict(d.get("meta") or {}),
         )
 
-    def __str__(self) -> str:
-        parts = [f"{self.obj_type}:{self.obj_id}"]
-        if self.obj_name:
-            parts.append(self.obj_name)
+    def format_sp(self) -> str:
+        """Компактная метка стороны/порта: s1p0."""
+        s = self.side if self.side is not None else "?"
+        p = self.port if self.port is not None else "?"
+        return f"s{s}p{p}"
+
+    def format_header(self) -> str:
+        """Строка для шапки to_table: type:id sNpM + host/name/port_name."""
+        parts = [f"{self.obj_type}:{self.obj_id}", self.format_sp()]
         if self.host:
             parts.append(f"host={self.host}")
-        if self.port is not None:
-            p = str(self.port)
-            if self.port_name:
-                p = f"{p}/{self.port_name}"
-            parts.append(f"port={p}")
+        if self.obj_name:
+            parts.append(f"name={self.obj_name}")
+        if self.port_name:
+            parts.append(f"port={self.port_name}")
         if self.commutation_index is not None:
-            parts.append(f"comm={self.commutation_index}")
-        if self.side is not None:
-            parts.append(f"side={self.side}")
+            parts.append(f"commutation={self.commutation_index}")
         return " ".join(parts)
+
+    def __str__(self) -> str:
+        return self.format_header()
 
 
 @dataclass
@@ -185,15 +190,31 @@ class PathReport:
         return {k: round(v, 4) for k, v in out.items()}
 
     def _pick_device_customer(self):
+        """Определить оборудование (olt/switch/…) и абонента среди концов."""
         device = self.device_endpoint
         customer = self.customer_endpoint
-        for ep in (self.from_endpoint, self.to_endpoint):
-            if ep is None:
-                continue
-            if ep.obj_type in _DEVICE_EP and device is None:
-                device = ep
-            if ep.obj_type == TYPE_CUSTOMER and customer is None:
-                customer = ep
+        ends = [ep for ep in (self.from_endpoint, self.to_endpoint) if ep is not None]
+
+        if customer is None:
+            for ep in ends:
+                if ep.obj_type == TYPE_CUSTOMER:
+                    customer = ep
+                    break
+
+        if device is None:
+            for prefer in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO):
+                for ep in ends:
+                    if ep.obj_type == prefer:
+                        device = ep
+                        break
+                if device is not None:
+                    break
+            if device is None:
+                for ep in ends:
+                    if ep.obj_type in _DEVICE_EP:
+                        device = ep
+                        break
+
         return device, customer
 
     def to_table(self) -> str:
@@ -205,27 +226,14 @@ class PathReport:
             f"(fiber={self.fiber_db:.3f}, splitter={self.splitter_db:.3f}, "
             f"joints={self.joint_db:.3f})",
         ]
-        if customer:
-            bits = [f"{customer.obj_type}:{customer.obj_id}"]
-            if customer.obj_name:
-                bits.append(f"name={customer.obj_name}")
-            if customer.commutation_index is not None:
-                bits.append(f"commutation={customer.commutation_index}")
-            if customer.port is not None:
-                bits.append(f"port={customer.port}")
-            lines.append("  customer: " + ", ".join(bits))
-        if device:
-            bits = [f"{device.obj_type}:{device.obj_id}"]
-            if device.obj_name:
-                bits.append(f"name={device.obj_name}")
-            if device.host:
-                bits.append(f"host={device.host}")
-            if device.port is not None:
-                p = str(device.port)
-                if device.port_name:
-                    p = f"{p}/{device.port_name}"
-                bits.append(f"port={p}")
-            lines.append(f"  {device.obj_type}: " + ", ".join(bits))
+        if customer is not None:
+            lines.append(f"  customer: {customer.format_header()}")
+        if device is not None:
+            lines.append(f"  {device.obj_type}: {device.format_header()}")
+        if customer is None and device is None:
+            for tag, ep in (("from", self.from_endpoint), ("to", self.to_endpoint)):
+                if ep is not None:
+                    lines.append(f"  {tag}: {ep.format_header()}")
         lines.append("-" * 72)
         for i, s in enumerate(self.segments, 1):
             bits = []
@@ -233,13 +241,11 @@ class PathReport:
                 bits.append(f"{s.obj_type}:{s.obj_id}")
             if s.obj_name:
                 bits.append(f"name={s.obj_name}")
-            if s.port is not None:
-                p = str(s.port)
-                if s.port_name:
-                    p = f"{p}/{s.port_name}"
-                bits.append(f"port={p}")
-            if s.side is not None:
-                bits.append(f"side={s.side}")
+            if s.side is not None or s.port is not None:
+                sp = f"s{s.side if s.side is not None else '?'}p{s.port if s.port is not None else '?'}"
+                bits.append(sp)
+            if s.port_name:
+                bits.append(f"port={s.port_name}")
             if s.length_m is not None:
                 bits.append(f"L={s.length_m:.1f}m")
             if s.length_source:
