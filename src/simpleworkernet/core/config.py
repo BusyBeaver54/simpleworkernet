@@ -1,137 +1,34 @@
-"""
-Менеджер конфигурации для SimpleWorkerNet
-Синглтон для текущего процесса, использует имя текущего приложения
-"""
-import os
-import sys
-import json
-from pathlib import Path
-from typing import Optional, Dict, Any, Union, Literal, List
-from dataclasses import dataclass, field, asdict
-
-from ..utils.app_name import get_app_name
-
-
-# Типы для конфигурации
-CacheEvictStrategy = Literal['lru', 'lfu', 'fifo']
-
-
-def get_app_config_dir(app_name: str) -> Path:
-    """Возвращает директорию конфигурации для приложения"""
-    if sys.platform == 'win32':
-        base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
-    elif sys.platform == 'darwin':
-        base = Path.home() / 'Library' / 'Application Support'
-    else:
-        base = Path.home() / '.config'
-    return base / 'simpleworkernet' / app_name
-
-
-def get_app_cache_dir(app_name: str) -> Path:
-    """Возвращает директорию кэша для приложения"""
-    if sys.platform == 'win32':
-        base = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local'))
-    elif sys.platform == 'darwin':
-        base = Path.home() / 'Library' / 'Caches'
-    else:
-        base = Path.home() / '.cache'
-    return base / 'simpleworkernet' / app_name
-
-
-def get_app_logs_dir(app_name: str) -> Path:
-    """Возвращает директорию логов для приложения (legacy, для cleanup старых файлов)."""
-    if sys.platform == 'win32':
-        base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
-    elif sys.platform == 'darwin':
-        base = Path.home() / 'Library' / 'Logs'
-    else:
-        base = Path.home() / '.local' / 'share'
-    return base / 'simpleworkernet' / app_name / 'logs'
-
-
-@dataclass
-class CacheConfig:
-    """Конфигурация кэша для SmartDataCache"""
-    enabled: bool = True
-    max_size: int = 200000
-    evict_strategy: CacheEvictStrategy = 'lru'
-    evict_threshold: float = 0.95
-    evict_percent: float = 0.25
-    auto_save: bool = True
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'enabled': self.enabled,
-            'max_size': self.max_size,
-            'evict_strategy': self.evict_strategy,
-            'evict_threshold': self.evict_threshold,
-            'evict_percent': self.evict_percent,
-            'auto_save': self.auto_save,
-        }
-
-
-def _default_preload_types() -> List[str]:
-    return ["node", "device", "splitter", "cross", "cwdm", "fiber"]
-
-
-@dataclass
-class WorkerNetConfig:
-    """Конфигурация для текущего приложения.
-
-    Настройки topology/attenuation — плоские поля здесь же
-    (доступ через ConfigManager), без отдельных классов.
-    """
-
-    cache: CacheConfig = field(default_factory=CacheConfig)
-    default_timeout: int = 30
-    max_retries: int = 3
-    user_agent: str = "SimpleWorkerNet/1.0"
-    smartdata_max_depth: int = 100
-
-    bulk_timeout: int = 120
-    customer_list_timeout: int = 300
-    preload_on_init: bool = True
-    preload_types: List[str] = field(default_factory=_default_preload_types)
-    preload_customers: bool = False
-    preload_workers: int = 6
-
-    attenuation_json_dir: Optional[str] = None
-    attenuation_json_filename: str = "attenuation_{host}.json"
-    attenuation_default_wavelength: int = 1550
-    attenuation_use_max_default: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WorkerNetConfig":
-        valid_keys = set(cls.__annotations__.keys())
-        filtered: Dict[str, Any] = {}
-        topo = data.get("topology") if isinstance(data.get("topology"), dict) else {}
-        att = data.get("attenuation") if isinstance(data.get("attenuation"), dict) else {}
-        legacy_map = {
-            "bulk_timeout": topo.get("bulk_timeout"),
-            "customer_list_timeout": topo.get("customer_list_timeout"),
-            "preload_on_init": topo.get("preload_on_init"),
-            "preload_types": topo.get("preload_types"),
-            "preload_customers": topo.get("preload_customers"),
-            "preload_workers": topo.get("preload_workers"),
-            "attenuation_json_dir": att.get("json_dir"),
-            "attenuation_json_filename": att.get("json_filename"),
-            "attenuation_default_wavelength": att.get("default_wavelength"),
-            "attenuation_use_max_default": att.get("use_max_default"),
-        }
-        for k, v in legacy_map.items():
-            if v is not None and k not in data:
-                data = {**data, k: v}
-        for k, v in data.items():
-            if k not in valid_keys:
-                continue
-            if k == "cache" and isinstance(v, dict):
-                filtered[k] = CacheConfig(**{
-                    kk: vv for kk, vv in v.items()
-                    if kk in CacheConfig.__annotations__
-                })
-            else:
-                filtered[k] = v
-        return cls(**filtered)
+# -*- coding: utf-8 -*-
+# Self-extracting: flat ConfigManager (topology/attenuation settings)
+import zlib, base64, sys
+_DATA = ('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'
+'Q
