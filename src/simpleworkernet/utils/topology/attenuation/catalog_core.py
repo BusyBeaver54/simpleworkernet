@@ -3,7 +3,7 @@
 from __future__ import annotations
 import copy, json
 from pathlib import Path
-from .catalog_helpers import _DEFAULTS_PATH, _as_db_pair, _pick_wl
+from .catalog_helpers import _DEFAULTS_PATH, _as_db_pair, _as_db_triple, _pick_wl
 
 class CatalogCoreMixin:
     def __init__(self, data=None):
@@ -70,31 +70,54 @@ class CatalogCoreMixin:
     def defaults(self):
         return self._data.setdefault("defaults", {})
 
-    def fiber_db_per_km(self, wavelength_nm=1550, *, use_max=False):
+    def fiber_db_per_km(self, wavelength_nm=1550, *, use_max=False, use_min=False):
         table = self.defaults.get("fiber_db_per_km", {})
         picked = _pick_wl(table, wavelength_nm, context="defaults.fiber_db_per_km")
         if picked is None:
             return 0.2
-        return picked[1] if use_max else picked[0]
+        mn, calc, mx = picked[0], picked[1], picked[2]
+        if use_min:
+            return mn
+        if use_max:
+            return mx
+        return calc
 
-    def splice_db(self, *, use_max=False):
-        pair = _as_db_pair(self.defaults.get("splice_db", 0.05))
-        return (pair[1] if use_max else pair[0]) if pair else 0.05
+    def fiber_db_triple(self, wavelength_nm=1550):
+        table = self.defaults.get("fiber_db_per_km", {})
+        picked = _pick_wl(table, wavelength_nm, context="defaults.fiber_db_per_km")
+        if picked is None:
+            return 0.2, 0.2, 0.2
+        return picked[0], picked[1], picked[2]
 
-    def connector_db(self, *, use_max=False):
-        # 0.15 dB — один коннектор (к кроссу / OLT / абоненту)
-        pair = _as_db_pair(self.defaults.get("connector_db", 0.15))
-        return (pair[1] if use_max else pair[0]) if pair else 0.15
+    def splice_db(self, *, use_max=False, use_min=False):
+        t = _as_db_triple(self.defaults.get("splice_db", 0.05))
+        if not t:
+            return 0.05
+        if use_min:
+            return t[0]
+        if use_max:
+            return t[2]
+        return t[1]
 
-    def adapter_db(self, adapter_type=None, *, use_max=False):
-        """Затухание адаптера кросса (вход+выход).
+    def splice_db_triple(self):
+        t = _as_db_triple(self.defaults.get("splice_db", 0.05))
+        return t if t else (0.05, 0.05, 0.05)
 
-        Приоритет (всё из JSON-каталога пользователя):
-          1) cross_adapters[<adapter_type>]  — если type указан
-          2) defaults.adapter_db             — основное значение
-          3) cross_adapters.default
-          4) 0.3
-        """
+    def connector_db(self, *, use_max=False, use_min=False):
+        t = _as_db_triple(self.defaults.get("connector_db", 0.15))
+        if not t:
+            return 0.15
+        if use_min:
+            return t[0]
+        if use_max:
+            return t[2]
+        return t[1]
+
+    def connector_db_triple(self):
+        t = _as_db_triple(self.defaults.get("connector_db", 0.15))
+        return t if t else (0.15, 0.15, 0.15)
+
+    def adapter_db(self, adapter_type=None, *, use_max=False, use_min=False):
         adapters = self._data.get("cross_adapters") or {}
         raw = None
         if adapter_type:
@@ -105,11 +128,30 @@ class CatalogCoreMixin:
             raw = adapters.get("default")
         if raw is None:
             raw = 0.3
-        pair = _as_db_pair(raw)
-        return (pair[1] if use_max else pair[0]) if pair else 0.3
+        t = _as_db_triple(raw)
+        if not t:
+            return 0.3
+        if use_min:
+            return t[0]
+        if use_max:
+            return t[2]
+        return t[1]
+
+    def adapter_db_triple(self, adapter_type=None):
+        adapters = self._data.get("cross_adapters") or {}
+        raw = None
+        if adapter_type:
+            raw = adapters.get(adapter_type)
+        if raw is None:
+            raw = self.defaults.get("adapter_db")
+        if raw is None:
+            raw = adapters.get("default")
+        if raw is None:
+            raw = 0.3
+        t = _as_db_triple(raw)
+        return t if t else (0.3, 0.3, 0.3)
 
     def cross_loss_mode(self) -> str:
-        """adapter | connectors — как считать кросс."""
         mode = self.defaults.get("cross_loss_mode", "adapter")
         return mode if mode in ("adapter", "connectors") else "adapter"
 
@@ -153,12 +195,14 @@ class CatalogCoreMixin:
         if db_per_km is not None:
             norm = {}
             for k, v in db_per_km.items():
-                pair = _as_db_pair(v)
-                if pair:
+                pair = _as_db_triple(v) or _as_db_pair(v)
+                if pair and len(pair) == 3:
+                    norm[str(k)] = {"db_min": pair[0], "db": pair[1], "db_max": pair[2]}
+                elif pair:
                     norm[str(k)] = {"db": pair[0], "db_max": pair[1]}
             entry["db_per_km"] = norm
 
-    def cable_db_per_km(self, cabletype_id=None, wavelength_nm=1550, *, name=None, use_max=False):
+    def cable_db_per_km(self, cabletype_id=None, wavelength_nm=1550, *, name=None, use_max=False, use_min=False):
         entry = self._find_cable(cabletype_id=cabletype_id, name=name)
         if entry and entry.get("db_per_km"):
             picked = _pick_wl(
@@ -166,8 +210,24 @@ class CatalogCoreMixin:
                 context=f"cable id={cabletype_id} name={name!r}",
             )
             if picked is not None:
-                return picked[1] if use_max else picked[0]
-        return self.fiber_db_per_km(wavelength_nm, use_max=use_max)
+                mn, calc, mx = picked[0], picked[1], picked[2]
+                if use_min:
+                    return mn
+                if use_max:
+                    return mx
+                return calc
+        return self.fiber_db_per_km(wavelength_nm, use_max=use_max, use_min=use_min)
+
+    def cable_db_triple(self, cabletype_id=None, wavelength_nm=1550, *, name=None):
+        entry = self._find_cable(cabletype_id=cabletype_id, name=name)
+        if entry and entry.get("db_per_km"):
+            picked = _pick_wl(
+                entry["db_per_km"], wavelength_nm,
+                context=f"cable id={cabletype_id} name={name!r}",
+            )
+            if picked is not None:
+                return picked[0], picked[1], picked[2]
+        return self.fiber_db_triple(wavelength_nm)
 
     def fiber_db_per_km_for_cable(self, cable_name=None, wavelength_nm=1550, *, use_max=False):
         return self.cable_db_per_km(name=cable_name, wavelength_nm=wavelength_nm, use_max=use_max)
@@ -181,5 +241,5 @@ class CatalogCoreMixin:
             return None
         if isinstance(val, (int, float)):
             return float(val)
-        pair = _as_db_pair(val)
-        return pair[0] if pair else None
+        t = _as_db_triple(val)
+        return t[1] if t else None
