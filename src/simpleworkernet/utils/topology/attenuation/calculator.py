@@ -17,6 +17,7 @@ from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
 
+
 class Attenuation(
     AttenuationBuildMixin,
     AttenuationFNMixin,
@@ -34,7 +35,7 @@ class Attenuation(
         if catalog is not None:
             self.catalog = catalog
         else:
-            # все значения затуханий — из JSON пользователя (~/.config/.../attenuation_<host>.json)
+            # все значения затуханий — из JSON пользователя
             loaded = None
             client_ref = client if client is not None else getattr(cgraph, "client", None)
             if client_ref is not None:
@@ -50,10 +51,19 @@ class Attenuation(
         self.client = client if client is not None else getattr(cgraph, "client", None)
 
     def calculate(
-        self, obj1_type: str, obj1_id: Union[int, str], obj2_type: str, obj2_id: Union[int, str],
-        *, wavelength: Optional[int] = None, obj1_side: Optional[int] = None, obj1_port: Optional[int] = None,
-        obj2_side: Optional[int] = None, obj2_port: Optional[int] = None,
-        direction: Optional[str] = None, use_max: Optional[bool] = None,
+        self,
+        obj1_type: str,
+        obj1_id: Union[int, str],
+        obj2_type: str,
+        obj2_id: Union[int, str],
+        *,
+        wavelength: Optional[int] = None,
+        obj1_side: Optional[int] = None,
+        obj1_port: Optional[int] = None,
+        obj2_side: Optional[int] = None,
+        obj2_port: Optional[int] = None,
+        direction: Optional[str] = None,
+        use_max: Optional[bool] = None,
     ):
         """PathReport (1 путь) или MultiPathReport (несколько ветвей)."""
         prev_wl, prev_max = self.wavelength, self.use_max
@@ -62,12 +72,11 @@ class Attenuation(
         if use_max is not None:
             self.use_max = bool(use_max)
         try:
-            plan = self._require_fiber_port(
+            # валидация входов (может бросить AttenuationError); возвращает PairPlan
+            self._require_fiber_port(
                 obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
             )
-            if plan is not None:
-                obj1_side, obj1_port, obj2_side, obj2_port = plan
 
             self._ensure_cgraph(
                 obj1_type, obj1_id, obj2_type, obj2_id,
