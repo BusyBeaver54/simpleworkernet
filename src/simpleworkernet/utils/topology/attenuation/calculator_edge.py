@@ -5,9 +5,10 @@
 - fiber↔fiber (один кабель, разные side) → потери волокна
 - один сплиттер IN↔OUT → IL сплиттера
 - сплиттер↔сплиттер (разные id) → только сварка (без коннекторов)
-- кросс internal: adapter 0.3 (вход+выход) ИЛИ 0 (если cross_loss_mode=connectors)
-- объект↔кросс: коннектор 0.15 (только при cross_loss_mode=connectors)
-- вход в OLT / приход к customer|onu|radio → коннектор 0.15
+- кросс internal: adapter 0.3 (вход+выход) при cross_loss_mode=adapter
+  или 0 при connectors (коннекторы на внешних рёбрах к кроссу)
+- объект↔кросс: коннектор 0.15 только при cross_loss_mode=connectors
+- вход в OLT / приход к customer|onu|radio|switch → коннектор 0.15
 - стык с волокном (иначе) → сварка
 """
 from __future__ import annotations
@@ -53,7 +54,6 @@ class AttenuationEdgeMixin:
         ta, tb = ua.get("obj_type"), va.get("obj_type")
         ida, idb = str(ua.get("obj_id")), str(va.get("obj_id"))
 
-        # Волокно: стороны одного кабеля
         if (
             ta == TYPE_FIBER and tb == TYPE_FIBER
             and ida == idb
@@ -62,13 +62,11 @@ class AttenuationEdgeMixin:
             segs.extend(self._fiber_segments(ua))
             return segs
 
-        # IL одного сплиттера
         if ta == TYPE_SPLITTER and tb == TYPE_SPLITTER and ida == idb:
             out_v = self._splitter_out_vertex(ua, va)
             segs.extend(self._splitter_segments(out_v, direction=direction))
             return segs
 
-        # Кросс internal: adapter 0.3 (режим adapter) или 0 (connectors — считают внешние)
         if is_internal and ta == TYPE_CROSS and tb == TYPE_CROSS and ida == idb:
             mode = self._cross_loss_mode()
             if mode == "adapter":
@@ -86,14 +84,15 @@ class AttenuationEdgeMixin:
             return segs
 
         if not is_internal:
-            segs.extend(self._external_joint_segments(
-                ua, va, connect_id=connect_id,
-            ))
+            segs.extend(self._external_joint_segments(ua, va, connect_id=connect_id))
         return segs
 
     def _cross_loss_mode(self) -> str:
-        """adapter | connectors (из defaults JSON)."""
-        mode = None
+        try:
+            if hasattr(self.catalog, "cross_loss_mode"):
+                return self.catalog.cross_loss_mode()
+        except Exception:
+            pass
         try:
             mode = self.catalog.defaults.get("cross_loss_mode")
         except Exception:
@@ -110,7 +109,6 @@ class AttenuationEdgeMixin:
         kinds = {ta, tb}
         meta = {"connect_id": connect_id}
 
-        # Сплиттер ↔ сплиттер (разные) — только сварка
         if ta == TYPE_SPLITTER and tb == TYPE_SPLITTER and ida != idb:
             db = self.catalog.splice_db(use_max=self.use_max)
             return [AttenuationSegment(
@@ -119,7 +117,6 @@ class AttenuationEdgeMixin:
                 source="default", wavelength_nm=self.wavelength, meta=meta,
             )]
 
-        # Объект ↔ кросс: коннектор только в режиме connectors
         if TYPE_CROSS in kinds:
             if self._cross_loss_mode() == "connectors":
                 db = self.catalog.connector_db(use_max=self.use_max)
@@ -134,8 +131,6 @@ class AttenuationEdgeMixin:
                     obj_id=ida if ta == TYPE_CROSS else idb,
                     source="default", wavelength_nm=self.wavelength, meta=meta,
                 )]
-            # режим adapter: стык к кроссу без доп. коннектора (0.3 уже на internal)
-            # если есть волокно — сварка на стороне кабеля
             if TYPE_FIBER in kinds:
                 db = self.catalog.splice_db(use_max=self.use_max)
                 return [AttenuationSegment(
@@ -145,7 +140,6 @@ class AttenuationEdgeMixin:
                 )]
             return []
 
-        # Вход в OLT / приход к абоненту (и др. актив) — коннектор 0.15
         terminal = kinds & _TERMINAL_CONNECTOR_TYPES
         if terminal:
             db = self.catalog.connector_db(use_max=self.use_max)
@@ -157,7 +151,6 @@ class AttenuationEdgeMixin:
                 wavelength_nm=self.wavelength, meta=meta,
             )]
 
-        # Стык с волокном — сварка
         if TYPE_FIBER in kinds:
             db = self.catalog.splice_db(use_max=self.use_max)
             return [AttenuationSegment(
@@ -166,7 +159,6 @@ class AttenuationEdgeMixin:
                 source="default", wavelength_nm=self.wavelength, meta=meta,
             )]
 
-        # Прочий стык (сплиттер↔сплиттер уже обработан) — сварка
         db = self.catalog.splice_db(use_max=self.use_max)
         return [AttenuationSegment(
             kind="splice", db=db,
