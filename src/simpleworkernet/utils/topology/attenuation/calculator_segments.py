@@ -77,6 +77,7 @@ def _obj_display_name(vattrs: dict) -> Optional[str]:
 
 
 def _olt_host(vattrs: dict) -> Optional[str]:
+    """Host/IP оборудования (olt, switch, onu, radio)."""
     obj = vattrs.get("api_obj") if vattrs else None
     host = _attr(
         obj,
@@ -134,7 +135,8 @@ def _label_vertex(vattrs: dict) -> str:
     oid = vattrs.get("obj_id")
     base = f"{ot}:{oid} s{vattrs.get('side')}p{vattrs.get('port')}"
     name = _obj_display_name(vattrs)
-    host = _olt_host(vattrs) if ot == TYPE_OLT else None
+    _dev = {TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO}
+    host = _olt_host(vattrs) if ot in _dev else None
     cable = _cable_name(vattrs) if ot == TYPE_FIBER else None
     extras = []
     if name and ot != TYPE_FIBER:
@@ -150,7 +152,6 @@ def _label_vertex(vattrs: dict) -> str:
 
 class AttenuationSegmentsMixin:
     def _vertex_attrs(self, index: int) -> dict:
-        """Атрибуты вершины CGraph по индексу."""
         if self.g is None:
             return {}
         try:
@@ -163,7 +164,6 @@ class AttenuationSegmentsMixin:
                 return {}
 
     def _fiber_length_m(self, fiber_id) -> Tuple[Optional[float], str]:
-        """(length_m, source) — из cache или API-модели волокна."""
         fid = int(fiber_id)
         if self.cache is not None:
             for name in ("get_fiber_length_m", "get_fiber_length"):
