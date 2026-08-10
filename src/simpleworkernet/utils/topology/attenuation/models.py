@@ -109,17 +109,18 @@ class PathReport:
             "-" * 72,
         ]
         for i, s in enumerate(self.segments, 1):
-            extra = ""
-            if s.kind == "splitter":
-                bits = []
-                if s.obj_name:
-                    bits.append(f"name={s.obj_name}")
-                if s.port is not None:
-                    bits.append(f"port={s.port}")
-                if s.port_name:
-                    bits.append(f"port_name={s.port_name}")
-                if bits:
-                    extra = " [" + ", ".join(bits) + "]"
+            bits = []
+            if s.obj_name:
+                bits.append(f"name={s.obj_name}")
+            if s.port is not None:
+                bits.append(f"port={s.port}")
+            if s.port_name:
+                bits.append(f"port_name={s.port_name}")
+            if s.meta.get("host"):
+                bits.append(f"host={s.meta['host']}")
+            if s.meta.get("cable_name") and not s.obj_name:
+                bits.append(f"cable={s.meta['cable_name']}")
+            extra = (" [" + ", ".join(bits) + "]") if bits else ""
             lines.append(f"{i:3d}. {s.kind:10s} {s.db:7.3f} dB  {s.description}{extra}")
         if self.warnings:
             lines.append("warnings: " + "; ".join(self.warnings))
