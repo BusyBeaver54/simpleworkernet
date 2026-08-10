@@ -1,5 +1,5 @@
 # simpleworkernet/utils/topology/attenuation/calculator.py
-"""Attenuation — calculate() between two objects."""
+"""Attenuation — calculate() between two objects (obj2 optional)."""
 from __future__ import annotations
 from typing import Any, List, Optional, Tuple, Union
 from ..keys import Interface
@@ -35,7 +35,6 @@ class Attenuation(
         if catalog is not None:
             self.catalog = catalog
         else:
-            # все значения затуханий — из JSON пользователя
             loaded = None
             client_ref = client if client is not None else getattr(cgraph, "client", None)
             if client_ref is not None:
@@ -54,8 +53,8 @@ class Attenuation(
         self,
         obj1_type: str,
         obj1_id: Union[int, str],
-        obj2_type: str,
-        obj2_id: Union[int, str],
+        obj2_type: Optional[str] = None,
+        obj2_id: Optional[Union[int, str]] = None,
         *,
         wavelength: Optional[int] = None,
         obj1_side: Optional[int] = None,
@@ -64,15 +63,35 @@ class Attenuation(
         obj2_port: Optional[int] = None,
         direction: Optional[str] = None,
         use_max: Optional[bool] = None,
+        max_paths: int = 50,
     ):
-        """PathReport (1 путь) или MultiPathReport (несколько ветвей)."""
+        """Расчёт затухания между объектами.
+
+        Parameters
+        ----------
+        obj1_type, obj1_id :
+            Обязательная стартовая точка (customer, olt, fiber, …).
+        obj2_type, obj2_id :
+            Конечная точка. Можно не указывать — тогда в построенном CGraph
+            ищутся пути до OLT/switch/onu/radio.
+        obj1_side, obj1_port, obj2_side, obj2_port :
+            Необязательны, если путь однозначен (например customer без port).
+            Для fiber↔fiber нужен port хотя бы с одной стороны.
+
+        Returns
+        -------
+        PathReport
+            Один однозначный путь.
+        MultiPathReport
+            Несколько ветвей (неоднозначность / ветвление на сплиттерах).
+        """
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
         if use_max is not None:
             self.use_max = bool(use_max)
         try:
-            # валидация входов (может бросить AttenuationError); возвращает PairPlan
+            # валидация (PairPlan); side/port для customer/olt не требуются
             self._require_fiber_port(
                 obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
@@ -83,21 +102,31 @@ class Attenuation(
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
+
             paths = self.find_paths(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
+                max_paths=max_paths,
             )
             if not paths:
                 raise AttenuationError(
-                    f"нет пути между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
+                    f"нет пути между {obj1_type}:{obj1_id}"
+                    + (f" и {obj2_type}:{obj2_id}" if obj2_type else "")
                 )
+
             reports = [
                 self._report_from_vpath(p, direction=direction) for p in paths
             ]
             if len(reports) == 1:
                 return reports[0]
-            return MultiPathReport(reports=reports, wavelength_nm=self.wavelength)
+
+            return MultiPathReport(
+                branches=reports,
+                wavelength_nm=self.wavelength,
+                from_label=reports[0].from_label if reports else "",
+                to_label=reports[0].to_label if reports else "",
+            )
         finally:
             self.wavelength, self.use_max = prev_wl, prev_max
 
