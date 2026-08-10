@@ -87,11 +87,24 @@ class CatalogCoreMixin:
         return (pair[1] if use_max else pair[0]) if pair else 0.15
 
     def adapter_db(self, adapter_type=None, *, use_max=False):
-        # 0.3 dB — вход+выход кросса целиком (два коннектора)
-        adapters = self._data.setdefault("cross_adapters", {})
-        raw = adapters.get(adapter_type) if adapter_type else None
+        """Затухание адаптера кросса (вход+выход).
+
+        Приоритет (всё из JSON-каталога пользователя):
+          1) cross_adapters[<adapter_type>]  — если type указан
+          2) defaults.adapter_db             — основное значение
+          3) cross_adapters.default
+          4) 0.3
+        """
+        adapters = self._data.get("cross_adapters") or {}
+        raw = None
+        if adapter_type:
+            raw = adapters.get(adapter_type)
         if raw is None:
-            raw = adapters.get("default", self.defaults.get("adapter_db", 0.3))
+            raw = self.defaults.get("adapter_db")
+        if raw is None:
+            raw = adapters.get("default")
+        if raw is None:
+            raw = 0.3
         pair = _as_db_pair(raw)
         return (pair[1] if use_max else pair[0]) if pair else 0.3
 

@@ -31,7 +31,19 @@ class Attenuation(
         wavelength: int = 1550, cache: Any = None, client: Any = None, use_max: bool = False,
     ) -> None:
         self.g = cgraph
-        self.catalog = catalog or AttenuationCatalog.with_defaults()
+        if catalog is not None:
+            self.catalog = catalog
+        else:
+            # все значения затуханий — из JSON пользователя (~/.config/.../attenuation_<host>.json)
+            loaded = None
+            client_ref = client if client is not None else getattr(cgraph, "client", None)
+            if client_ref is not None:
+                try:
+                    from .template import load_attenuation_catalog
+                    loaded = load_attenuation_catalog(client_ref)
+                except Exception:
+                    loaded = None
+            self.catalog = loaded or AttenuationCatalog.with_defaults()
         self.wavelength = int(wavelength)
         self.use_max = bool(use_max)
         self.cache = cache if cache is not None else getattr(cgraph, "cache", None)
@@ -54,95 +66,36 @@ class Attenuation(
                 obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
             )
+            if plan is not None:
+                obj1_side, obj1_port, obj2_side, obj2_port = plan
+
             self._ensure_cgraph(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
-            v1, v2 = self._pick_endpoint_pair(
+            paths = self.find_paths(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
-            qmeta = {
-                "obj1_type": obj1_type, "obj1_id": obj1_id,
-                "obj1_side": obj1_side, "obj1_port": obj1_port,
-                "obj2_type": obj2_type, "obj2_id": obj2_id,
-                "obj2_side": obj2_side, "obj2_port": obj2_port,
-                "strategy": getattr(plan, "strategy", None),
-            }
-            if v1 == v2:
-                return PathReport(
-                    wavelength_nm=self.wavelength,
-                    from_label=_label_vertex(self._vertex_attrs(v1)),
-                    to_label=_label_vertex(self._vertex_attrs(v2)),
-                    total_db=0.0, vertex_path=[v1], query_meta=qmeta,
-                )
-            paths = self.all_simple_paths(v1, v2)
             if not paths:
                 raise AttenuationError(
-                    f"нет связи в CGraph между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
+                    f"нет пути между {obj1_type}:{obj1_id} и {obj2_type}:{obj2_id}"
                 )
-            if len(paths) == 1:
-                report = self._report_from_vpath(paths[0], direction=direction)
-                report.query_meta = qmeta
-                return report
-            branches = []
-            for vp in paths:
-                r = self._report_from_vpath(vp, direction=direction)
-                r.query_meta = dict(qmeta)
-                branches.append(r)
-            return MultiPathReport(
-                branches=branches, wavelength_nm=self.wavelength,
-                from_label=_label_vertex(self._vertex_attrs(v1)),
-                to_label=_label_vertex(self._vertex_attrs(v2)),
-                warnings=[f"нелинейный CGraph: {len(branches)} ветвей"],
-            )
+            reports = [
+                self._report_from_vpath(p, direction=direction) for p in paths
+            ]
+            if len(reports) == 1:
+                return reports[0]
+            return MultiPathReport(reports=reports, wavelength_nm=self.wavelength)
         finally:
-            self.wavelength = prev_wl
-            self.use_max = prev_max
+            self.wavelength, self.use_max = prev_wl, prev_max
 
-    def _vertex_attrs(self, idx: int) -> dict:
-        v = self.g.vs[idx]
-        return {k: v[k] for k in v.attributes()}
-
-    def find_vertices(self, obj_type=None, obj_id=None, *, side=None, port=None, node_id=None):
-        found = []
-        for v in self.g.vs:
-            if obj_type is not None and v["obj_type"] != obj_type:
-                continue
-            if obj_id is not None and str(v["obj_id"]) != str(obj_id):
-                continue
-            if side is not None and int(v["side"]) != int(side):
-                continue
-            if port is not None and int(v["port"]) != int(port):
-                continue
-            if node_id is not None and v["node_id"] != node_id:
-                continue
-            found.append(v.index)
-        return found
-
-    def find_vertex(self, obj_type=None, obj_id=None, **kwargs):
-        hits = self.find_vertices(obj_type, obj_id, **kwargs)
-        return hits[0] if hits else None
-
-    def resolve_vertex(self, ref: VertexRef):
-        if isinstance(ref, int):
-            return ref if 0 <= ref < self.g.vcount() else None
-        if isinstance(ref, Interface):
-            return self.find_vertex(ref.obj.obj_type, ref.obj.id, side=ref.side, port=ref.port)
-        if isinstance(ref, tuple) and len(ref) >= 2:
-            side = ref[2] if len(ref) > 2 else None
-            port = ref[3] if len(ref) > 3 else None
-            return self.find_vertex(ref[0], ref[1], side=side, port=port)
-        if isinstance(ref, str) and ":" in ref:
-            parts = ref.split(":")
-            side = int(parts[2]) if len(parts) > 2 else None
-            port = int(parts[3]) if len(parts) > 3 else None
-            return self.find_vertex(parts[0], parts[1], side=side, port=port)
-        return None
-
-    def path(self, source: VertexRef, target: VertexRef, *, direction=None) -> PathReport:
+    def path_report(
+        self, source: VertexRef, target: VertexRef, *,
+        direction: Optional[str] = None,
+    ) -> PathReport:
         if self.g is None:
             raise AttenuationError("CGraph не задан")
         s = self.resolve_vertex(source) if not isinstance(source, int) else source
