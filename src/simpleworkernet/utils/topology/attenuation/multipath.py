@@ -22,11 +22,11 @@ class MultiPathReport:
 
     @property
     def total_db_min(self) -> float:
-        return min((getattr(b, "total_db_min", b.total_db) for b in self.branches), default=0.0)
+        return min((b.total_db_min for b in self.branches), default=0.0)
 
     @property
     def total_db_max(self) -> float:
-        return max((getattr(b, "total_db_max", b.total_db) for b in self.branches), default=0.0)
+        return max((b.total_db_max for b in self.branches), default=0.0)
 
     @property
     def total_db_avg(self) -> float:
@@ -36,17 +36,23 @@ class MultiPathReport:
 
     @property
     def total_db(self) -> float:
+        """Среднее расчётное по ветвям."""
         return self.total_db_avg
 
     def branch_for(self, obj_type: str, obj_id) -> Optional[PathReport]:
         key = f"{obj_type}:{obj_id}"
         for b in self.branches:
-            fe, te = getattr(b, "from_endpoint", None), getattr(b, "to_endpoint", None)
-            if fe and fe.obj_type == obj_type and str(fe.obj_id) == str(obj_id):
+            if b.from_endpoint and (
+                b.from_endpoint.obj_type == obj_type
+                and str(b.from_endpoint.obj_id) == str(obj_id)
+            ):
                 return b
-            if te and te.obj_type == obj_type and str(te.obj_id) == str(obj_id):
+            if b.to_endpoint and (
+                b.to_endpoint.obj_type == obj_type
+                and str(b.to_endpoint.obj_id) == str(obj_id)
+            ):
                 return b
-            if key in (getattr(b, "to_label", "") or "") or key in (getattr(b, "from_label", "") or ""):
+            if key in (b.to_label or "") or key in (b.from_label or ""):
                 return b
         return None
 
@@ -80,11 +86,10 @@ class MultiPathReport:
             "=" * 72,
         ]
         for i, b in enumerate(self.branches, 1):
-            tmin = getattr(b, "total_db_min", b.total_db)
-            tmax = getattr(b, "total_db_max", b.total_db)
             lines.append(
                 f"--- branch {i}/{self.count}: "
-                f"calc={b.total_db:.3f} min={tmin:.3f} max={tmax:.3f} dB ---"
+                f"calc={b.total_db:.3f} min={b.total_db_min:.3f} "
+                f"max={b.total_db_max:.3f} dB ---"
             )
             lines.append(b.to_table())
         if self.warnings:
