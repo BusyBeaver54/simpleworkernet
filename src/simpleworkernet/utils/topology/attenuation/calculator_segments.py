@@ -1,6 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator_segments.py
 """Segment helpers for Attenuation."""
 from __future__ import annotations
+import re
 from typing import Any, Optional, Sequence, Tuple
 from ..constants import (
     TYPE_CUSTOMER, TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SPLITTER, TYPE_SWITCH,
@@ -14,6 +15,13 @@ _SPLITTER_OUT_SIDE = 2
 _DEVICE_TYPES = frozenset({
     TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER,
 })
+
+# label вида "splitter:16926 side=2 port=4" / "Interface(...)"
+_IFACE_RE = re.compile(
+    r"^(?:Interface\(|ObjKey\(|"
+    r"(?:fiber|splitter|olt|customer|cross|switch|onu|radio|node|cwdm):)",
+    re.I,
+)
 
 
 def _attr(obj, *names, default=None):
@@ -31,21 +39,47 @@ def _attr(obj, *names, default=None):
     return default
 
 
+def _looks_like_iface_label(value: Any) -> bool:
+    if value is None:
+        return True
+    s = str(value).strip()
+    if not s:
+        return True
+    if s.startswith("Interface(") or s.startswith("ObjKey("):
+        return True
+    if " side=" in s and " port=" in s:
+        return True
+    if _IFACE_RE.match(s):
+        return True
+    return False
+
+
 def _obj_display_name(vattrs: dict) -> Optional[str]:
-    """Человекочитаемое имя объекта из вершины / api_obj."""
+    """Имя объекта из модели (api_obj), НЕ из str(Interface)."""
     if not vattrs:
         return None
-    for key in ("obj_name", "name", "title", "label"):
-        v = vattrs.get(key)
-        if v not in (None, ""):
-            s = str(v)
-            # Interface(...) — не имя
-            if not s.startswith("Interface(") and not s.startswith("ObjKey("):
-                return s
     obj = vattrs.get("api_obj")
-    name = _attr(obj, "name", "title", "label", "code", "mark")
-    if name:
-        return str(name)
+    oid = str(vattrs.get("obj_id") or "")
+
+    # 1) модель API — основной источник
+    name = _attr(
+        obj,
+        "name", "title", "label", "caption",
+        "fio", "full_name", "customer_name", "device_name",
+    )
+    if name is not None:
+        s = str(name).strip()
+        if s and not _looks_like_iface_label(s) and s != oid:
+            return s
+
+    # 2) явные поля вершины (не name — там str(iface))
+    for key in ("obj_name", "title", "label", "display_name"):
+        v = vattrs.get(key)
+        if v is not None and not _looks_like_iface_label(v):
+            s = str(v).strip()
+            if s and s != oid:
+                return s
+
     return None
 
 
@@ -53,35 +87,62 @@ def _olt_host(vattrs: dict) -> Optional[str]:
     obj = vattrs.get("api_obj") if vattrs else None
     host = _attr(
         obj,
-        "host", "hostname", "ip", "ip_address", "mgmt_ip", "address",
-        "host_name",
+        "host", "hostname", "ip", "ip_address", "mgmt_ip",
+        "address", "host_name", "ipaddr",
     )
-    if host:
+    if host not in (None, ""):
         return str(host)
-    # иногда host вложен
     if obj is not None:
-        nested = _attr(obj, "device", "info", "net")
-        host = _attr(nested, "host", "hostname", "ip")
-        if host:
+        nested = _attr(obj, "device", "info", "net", "network")
+        host = _attr(nested, "host", "hostname", "ip", "ip_address")
+        if host not in (None, ""):
             return str(host)
     return None
 
 
 def _cable_name(vattrs: dict) -> Optional[str]:
+    """Имя/марка кабеля из модели fiber, не id волокна."""
     if not vattrs:
         return None
+    oid = str(vattrs.get("obj_id") or "")
+
     for key in ("cable_name", "cable_title", "fiber_name"):
         v = vattrs.get(key)
-        if v not in (None, ""):
+        if v not in (None, "") and str(v) != oid and not _looks_like_iface_label(v):
             return str(v)
+
     obj = vattrs.get("api_obj")
-    name = _attr(obj, "name", "title", "code", "mark", "cable_name")
-    if name:
-        return str(name)
-    # тип кабеля
-    ctype = _attr(obj, "cable_type", "cabletype", "type_name")
-    if ctype:
-        return str(ctype)
+
+    # явные поля типа кабеля
+    for key in (
+        "cable_name", "cabletype_name", "cable_type_name",
+        "type_name", "cabletypename",
+    ):
+        v = _attr(obj, key)
+        if v not in (None, "") and str(v) != oid:
+            return str(v)
+
+    # вложенный объект типа кабеля
+    ct = _attr(obj, "cable_type", "cabletype", "cableType", "type")
+    if ct is not None:
+        if isinstance(ct, str) and ct.strip() and ct != oid and not ct.isdigit():
+            return ct.strip()
+        n = _attr(ct, "name", "title", "mark", "code")
+        if n not in (None, "") and str(n) != oid:
+            return str(n)
+
+    # mark / code — только если это не числовой id
+    for key in ("mark", "code", "name", "title"):
+        v = _attr(obj, key)
+        if v in (None, ""):
+            continue
+        s = str(v).strip()
+        if not s or s == oid or s.isdigit():
+            continue
+        if _looks_like_iface_label(s):
+            continue
+        return s
+
     return None
 
 
@@ -150,8 +211,13 @@ class AttenuationSegmentsMixin:
         if splitter_obj is None:
             return None
         inv_id = getattr(splitter_obj, "inventory_id", None)
+        if inv_id is None and isinstance(splitter_obj, dict):
+            inv_id = splitter_obj.get("inventory_id")
         if inv_id is None or self.cache is None or self.client is None:
-            return getattr(splitter_obj, "catalog_id", None)
+            cid = getattr(splitter_obj, "catalog_id", None)
+            if cid is None and isinstance(splitter_obj, dict):
+                cid = splitter_obj.get("catalog_id")
+            return cid
         inv = None
         for name in ("get_inventory_item", "get_inventory"):
             fn = getattr(self.cache, name, None)
@@ -162,14 +228,16 @@ class AttenuationSegmentsMixin:
                 except Exception:
                     pass
         if inv is None:
-            return getattr(splitter_obj, "catalog_id", None)
-        return getattr(inv, "catalog_id", None)
+            cid = getattr(splitter_obj, "catalog_id", None)
+            if cid is None and isinstance(splitter_obj, dict):
+                cid = splitter_obj.get("catalog_id")
+            return cid
+        return getattr(inv, "catalog_id", None) if not isinstance(inv, dict) else inv.get("catalog_id")
 
     def _resolve_cable_name(self, fiber_vertex_attrs: dict) -> Optional[str]:
         name = _cable_name(fiber_vertex_attrs)
         if name:
             return name
-        # из кэша/API
         fid = fiber_vertex_attrs.get("obj_id")
         if fid is None or self.client is None:
             return None
@@ -179,4 +247,30 @@ class AttenuationSegmentsMixin:
                 fiber = self._load_fiber(int(fid))
             except Exception:
                 fiber = None
-        return _cable_name({"api_obj": fiber}) if fiber is not None else None
+        return _cable_name({"api_obj": fiber, "obj_id": fid}) if fiber is not None else None
+
+    def _resolve_splitter_name(self, splitter_vertex_attrs: dict) -> Optional[str]:
+        """Имя сплиттера из модели / inventory."""
+        name = _obj_display_name(splitter_vertex_attrs)
+        if name:
+            return name
+        obj = splitter_vertex_attrs.get("api_obj")
+        if obj is None:
+            return None
+        # inventory.name часто содержит реальное имя
+        inv_id = _attr(obj, "inventory_id")
+        if inv_id is not None and self.cache is not None and self.client is not None:
+            inv = None
+            for mname in ("get_inventory_item", "get_inventory"):
+                fn = getattr(self.cache, mname, None)
+                if callable(fn):
+                    try:
+                        inv = fn(self.client, int(inv_id))
+                        break
+                    except Exception:
+                        pass
+            if inv is not None:
+                n = _attr(inv, "name", "title", "label", "mark")
+                if n and not _looks_like_iface_label(n):
+                    return str(n)
+        return None
