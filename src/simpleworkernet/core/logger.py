@@ -5,7 +5,7 @@
 клиентский код (logging.basicConfig / getLogger).
 
 Имя логгера для %(name)s:
-    workernet.<имя_файла_без_.py>.<имя_клиентского_скрипта_без_хеша>
+    workernet.<имя_файла_без_.py>
 
 Уровень логгера библиотеки — NOTSET: фильтрация идёт по root / parent,
 поэтому logging.basicConfig(level=INFO) скрывает debug из библиотеки.
@@ -14,17 +14,11 @@ from __future__ import annotations
 
 import inspect
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .constants import LOGGER_NAME
 from ..utils.app_name import get_app_name
-
-
-def _script_display_name() -> str:
-    """Имя клиентского скрипта без хеша пути."""
-    return get_app_name(with_hash=False)
 
 
 def _caller_module_stem() -> str:
@@ -50,8 +44,8 @@ def _caller_module_stem() -> str:
 
 
 def _logger_name_for_caller() -> str:
-    """workernet.<file>.<script>."""
-    return f"{LOGGER_NAME}.{_caller_module_stem()}.{_script_display_name()}"
+    """workernet.<file> — без имени клиентского скрипта."""
+    return f"{LOGGER_NAME}.{_caller_module_stem()}"
 
 
 class WorkerNetLogger:
@@ -59,7 +53,7 @@ class WorkerNetLogger:
     Фасад над logging.Logger.
 
     На каждый вызов debug/info/… выбирается logger с именем
-    workernet.<модуль>.<скрипт>, уровень NOTSET → наследует root.
+    workernet.<модуль>, уровень NOTSET → наследует root.
     """
 
     _instance: Optional["WorkerNetLogger"] = None
