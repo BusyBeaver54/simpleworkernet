@@ -50,6 +50,45 @@ def _loading_types() -> set:
     return s
 
 
+def _extract_obj_id(obj: Any) -> Optional[Union[int, str]]:
+    """id / code / uuid — и у model, и у dict."""
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        for key in ("id", "code", "uuid"):
+            val = obj.get(key)
+            if val is not None and val != "":
+                return val
+        return None
+    for key in ("id", "code", "uuid"):
+        val = getattr(obj, key, None)
+        if val is not None and val != "":
+            return val
+    return None
+
+
+def _result_to_objects(result: Any) -> List[Any]:
+    """SmartData.to_list() / list / одиночный объект / None."""
+    if result is None:
+        return []
+    if hasattr(result, "to_list") and callable(result.to_list):
+        try:
+            items = result.to_list()
+            if items is not None:
+                return list(items)
+        except Exception as e:
+            _get_logger().warning("to_list() failed: %s", e)
+        if hasattr(result, "to_raw_list") and callable(result.to_raw_list):
+            try:
+                return list(result.to_raw_list() or [])
+            except Exception:
+                pass
+        return []
+    if isinstance(result, (list, tuple)):
+        return list(result)
+    return [result]
+
+
 @contextmanager
 def _temporary_timeout(seconds: Optional[int]):
     """Временно поднять default_timeout клиента для долгих get_all_*."""
@@ -100,6 +139,8 @@ class DataCache:
         self._cable_catalog: Optional[List[Any]] = None
 
         self._lock = threading.RLock()
+        # requests.Session клиента НЕ потокобезопасен — все API через этот lock
+        self._api_lock = threading.RLock()
         self._preload_futures: Dict[str, Future] = {}
         self._preload_executor: Optional[ThreadPoolExecutor] = None
 
@@ -211,9 +252,13 @@ class DataCache:
             if obj is not None:
                 return obj
 
-        obj = loader()
-        if obj is not None:
-            self.set_object(obj_type, obj_id, obj)
+        with self._api_lock:
+            obj = self.get_object(obj_type, obj_id)
+            if obj is not None:
+                return obj
+            obj = loader()
+            if obj is not None:
+                self.set_object(obj_type, obj_id, obj)
         return obj
 
     def get_commutations(
@@ -233,9 +278,15 @@ class DataCache:
         obj_id: Union[int, str],
         loader: Callable[[], List[Any]],
     ) -> List[Any]:
-        key = (obj_type, obj_id)
-        comms = self._commutations.get(key)
-        if comms is None:
+        for oid in self._id_variants(obj_id):
+            comms = self._commutations.get((obj_type, oid))
+            if comms is not None:
+                return comms
+        with self._api_lock:
+            for oid in self._id_variants(obj_id):
+                comms = self._commutations.get((obj_type, oid))
+                if comms is not None:
+                    return comms
             comms = loader()
             if comms is not None:
                 self.set_commutations(obj_type, obj_id, comms)
@@ -293,27 +344,33 @@ class DataCache:
 
         logger = _get_logger()
         timeout = self._bulk_timeout(object_type)
-        try:
-            with _temporary_timeout(timeout):
-                result = loader()
-            objects = result.to_list() if result else []
-        except Exception as e:
-            logger.error(f"Ошибка загрузки всех объектов типа {object_type}: {e}")
-            objects = []
+        objects: List[Any] = []
+        with self._api_lock:
+            with self._lock:
+                if object_type in self._all_objects:
+                    return self._all_objects[object_type]
+            try:
+                with _temporary_timeout(timeout):
+                    result = loader()
+                objects = _result_to_objects(result)
+            except Exception as e:
+                logger.error(
+                    "Ошибка загрузки всех объектов типа %s: %s", object_type, e
+                )
+                objects = []
 
         obj_dict: Dict[Union[int, str], Any] = {}
+        skipped = 0
         for obj in objects:
-            obj_id = (
-                getattr(obj, "id", None)
-                or getattr(obj, "code", None)
-                or getattr(obj, "uuid", None)
-            )
+            obj_id = _extract_obj_id(obj)
             if obj_id is not None:
-                obj_dict[obj_id] = obj
+                for oid in self._id_variants(obj_id):
+                    obj_dict[oid] = obj
                 self.set_object(object_type, obj_id, obj)
+            else:
+                skipped += 1
 
         with self._lock:
-            # merge if parallel fiber loads etc.
             existing = self._all_objects.get(object_type)
             if existing:
                 existing.update(obj_dict)
@@ -321,8 +378,18 @@ class DataCache:
             else:
                 self._all_objects[object_type] = obj_dict
         logger.info(
-            "DataCache: загружено %s объектов типа %s (timeout=%ss)",
-            len(obj_dict), object_type, timeout,
+            "DataCache: загружено %s объектов типа %s (timeout=%ss, skipped_no_id=%s)",
+            len({k: v for k, v in obj_dict.items() if not isinstance(k, str) or not k.isdigit()}),
+            object_type,
+            timeout,
+            skipped,
+        )
+        # log count of unique objects better
+        logger.info(
+            "DataCache: unique ids type %s ≈ %s (raw keys=%s)",
+            object_type,
+            len({id(v) for v in obj_dict.values()}),
+            len(obj_dict),
         )
         return obj_dict
 
@@ -364,7 +431,8 @@ class DataCache:
         if include_customers and "customer" not in types:
             types = list(types) + ["customer"]
 
-        n_workers = workers if workers is not None else default_workers
+        # default 1: Session клиента не thread-safe; под _api_lock всё равно сериализуется
+        n_workers = workers if workers is not None else 1
         n_workers = max(1, min(int(n_workers), max(1, len(list(types)))))
 
         jobs: Dict[str, Callable[[], Any]] = {
@@ -558,7 +626,7 @@ class DataCache:
             return self._cable_catalog
         try:
             result = client.Fiber.catalog_cables_get()
-            self._cable_catalog = result.to_list() if result else []
+            self._cable_catalog = _result_to_objects(result)
         except Exception as e:
             _get_logger().warning(f"catalog_cables_get failed: {e}")
             self._cable_catalog = []
@@ -597,41 +665,45 @@ class DataCache:
         try:
             logger = _get_logger()
             timeout = self._bulk_timeout(TYPE_FIBER)
-            result: Dict[int, Any] = {}
-            try:
-                with _temporary_timeout(timeout):
-                    catalog = client.Fiber.catalog_types_get()
-                for cab_type in catalog.to_list() if catalog else []:
-                    type_id = getattr(cab_type, "id", None)
-                    if type_id is None:
-                        continue
-                    try:
-                        with _temporary_timeout(timeout):
-                            batch = client.Fiber.get_list(cable_line_type_id=type_id)
-                        objects = batch.to_list() if batch else []
-                    except Exception as e:
-                        logger.error(
-                            "Ошибка загрузки fiber cable_line_type_id=%s: %s",
-                            type_id, e,
-                        )
-                        objects = []
-                    for obj in objects:
-                        obj_id = (
-                            getattr(obj, "id", None)
-                            or getattr(obj, "code", None)
-                            or getattr(obj, "uuid", None)
-                        )
-                        if obj_id is not None:
-                            result[obj_id] = obj
-                            self.set_object(TYPE_FIBER, obj_id, obj)
-            except Exception as e:
-                logger.error(f"Ошибка загрузки всех fiber: {e}")
+            result: Dict[Union[int, str], Any] = {}
+            with self._api_lock:
+                with self._lock:
+                    if TYPE_FIBER in self._all_objects:
+                        return self._all_objects[TYPE_FIBER]
+                try:
+                    with _temporary_timeout(timeout):
+                        catalog = client.Fiber.catalog_types_get()
+                    for cab_type in _result_to_objects(catalog):
+                        type_id = _extract_obj_id(cab_type)
+                        if type_id is None:
+                            continue
+                        try:
+                            with _temporary_timeout(timeout):
+                                batch = client.Fiber.get_list(
+                                    cable_line_type_id=type_id
+                                )
+                            objects = _result_to_objects(batch)
+                        except Exception as e:
+                            logger.error(
+                                "Ошибка загрузки fiber cable_line_type_id=%s: %s",
+                                type_id, e,
+                            )
+                            objects = []
+                        for obj in objects:
+                            obj_id = _extract_obj_id(obj)
+                            if obj_id is not None:
+                                for oid in self._id_variants(obj_id):
+                                    result[oid] = obj
+                                self.set_object(TYPE_FIBER, obj_id, obj)
+                except Exception as e:
+                    logger.error("Ошибка загрузки всех fiber: %s", e)
 
             with self._lock:
                 self._all_objects[TYPE_FIBER] = result
             logger.info(
-                "DataCache: загружено %s объектов типа %s (timeout=%ss)",
-                len(result), TYPE_FIBER, timeout,
+                "DataCache: загружено %s fiber (timeout=%ss)",
+                len({id(v) for v in result.values()}),
+                timeout,
             )
             return result
         finally:
