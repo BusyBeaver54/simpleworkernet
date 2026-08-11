@@ -36,7 +36,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         self.logger = _get_logger()
         self.cache = (
             cache if cache is not None
-            else DataCache(client)  # фоновый preload get_all_* по config
+            else DataCache(client)  # без preload; передайте cache=DataCache(client, preload_types=[...])
         )
         self.cgraphs: List[CGraph] = []
         self.fngraph: Optional[FNGraph] = None
