@@ -20,8 +20,9 @@ class AttenuationPathMixin:
         В графе port вершины fiber — clps_mid из коммутации (часто номер ОВ,
         иногда id волокна). Нормализуем:
           port      → номер ОВ (number)
-          port_name → Color.name волокна (Fiber.Get_list.fibers.color.name)
-          meta      → fiber_core_id, module, fiber_number, module_fiber (m1f5)
+          port_name → fiber_color (Fiber.Get_list.fibers.color.name)
+          meta      → fiber_core_id, module_number, fiber_number,
+                      fiber_color, module_color, mf_path (m1f5)
         """
         raw_port = fiber_vertex_attrs.get("port")
         try:
@@ -72,8 +73,9 @@ class AttenuationPathMixin:
 
         core_id = None
         number = None
-        module = None
-        color_name = None
+        module_number = None
+        fiber_color = None
+        module_color = None
         matched = None
 
         def _f_attr(f, *names, default=None):
@@ -90,9 +92,7 @@ class AttenuationPathMixin:
                     return v
             return default
 
-        def _color_name(f) -> Optional[str]:
-            """Fiber.Get_list.Fibers.Color.name"""
-            color = _f_attr(f, "color", "Color")
+        def _color_obj_name(color) -> Optional[str]:
             if color is None:
                 return None
             if isinstance(color, str):
@@ -102,6 +102,14 @@ class AttenuationPathMixin:
             if name not in (None, ""):
                 return str(name).strip() or None
             return None
+
+        def _fiber_color_name(f) -> Optional[str]:
+            """Fiber.Get_list.Fibers.color.name"""
+            return _color_obj_name(_f_attr(f, "color", "Color"))
+
+        def _module_color_name(f) -> Optional[str]:
+            """Fiber.Get_list.Fibers.moduleColor.name"""
+            return _color_obj_name(_f_attr(f, "moduleColor", "module_color", "ModuleColor"))
 
         if fibers and raw_port_i is not None:
             # 1) по id волокна
@@ -133,8 +141,9 @@ class AttenuationPathMixin:
                 number = int(_f_attr(matched, "number", "port")) if _f_attr(matched, "number", "port") is not None else None
             except (TypeError, ValueError):
                 number = None
-            module = self._fiber_module_index(matched, fibers)
-            color_name = _color_name(matched)
+            module_number = self._fiber_module_index(matched, fibers)
+            fiber_color = _fiber_color_name(matched)
+            module_color = _module_color_name(matched)
         elif raw_port_i is not None:
             # нет списка волокон: если port небольшой — считаем номером ОВ
             if raw_port_i < 10000:
@@ -142,24 +151,25 @@ class AttenuationPathMixin:
             else:
                 core_id = raw_port_i
 
-        # port_name = цвет волокна; m{module}f{number} — в meta
-        module_fiber = None
-        if number is not None and module is not None:
-            module_fiber = f"m{module}f{number}"
+        # port_name = цвет волокна; mf_path = m{module}f{number}
+        mf_path = None
+        if number is not None and module_number is not None:
+            mf_path = f"m{module_number}f{number}"
         elif number is not None:
-            module_fiber = f"f{number}"
+            mf_path = f"f{number}"
 
-        port_name = color_name
-        if not port_name and module_fiber:
+        port_name = fiber_color
+        if not port_name and mf_path:
             # fallback, если цвета нет в данных
-            port_name = module_fiber
+            port_name = mf_path
 
         return {
             "fiber_number": number,
             "fiber_core_id": core_id,
-            "module": module,
-            "color_name": color_name,
-            "module_fiber": module_fiber,
+            "module_number": module_number,
+            "fiber_color": fiber_color,
+            "module_color": module_color,
+            "mf_path": mf_path,
             "port_name": port_name,
             "port": number if number is not None else raw_port_i,
         }
@@ -257,9 +267,10 @@ class AttenuationPathMixin:
             "length_source": length_source,
             "fiber_core_id": core.get("fiber_core_id"),
             "fiber_number": core.get("fiber_number"),
-            "module": core.get("module"),
-            "color_name": core.get("color_name"),
-            "module_fiber": core.get("module_fiber"),
+            "module_number": core.get("module_number"),
+            "fiber_color": core.get("fiber_color"),
+            "module_color": core.get("module_color"),
+            "mf_path": core.get("mf_path"),
         }
         if length_m is None:
             return [AttenuationSegment(
@@ -446,12 +457,14 @@ class AttenuationPathMixin:
                 meta["fiber_core_id"] = core["fiber_core_id"]
             if core.get("fiber_number") is not None:
                 meta["fiber_number"] = core["fiber_number"]
-            if core.get("module") is not None:
-                meta["module"] = core["module"]
-            if core.get("color_name"):
-                meta["color_name"] = core["color_name"]
-            if core.get("module_fiber"):
-                meta["module_fiber"] = core["module_fiber"]
+            if core.get("module_number") is not None:
+                meta["module_number"] = core["module_number"]
+            if core.get("fiber_color"):
+                meta["fiber_color"] = core["fiber_color"]
+            if core.get("module_color"):
+                meta["module_color"] = core["module_color"]
+            if core.get("mf_path"):
+                meta["mf_path"] = core["mf_path"]
         return EndpointInfo(
             obj_type=ot, obj_id=oid,
             obj_name=str(name) if name else None,
