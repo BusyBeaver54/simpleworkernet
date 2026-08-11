@@ -3,10 +3,10 @@
 from simpleworkernet.utils.topology.builders.handlers import (
     CrossHandler,
     FiberHandler,
-    SplitterCwdmHandler,
     TerminalHandler,
     get_handler,
 )
+from simpleworkernet.utils.topology.builders.handlers_splitter import SplitterCwdmHandler
 from simpleworkernet.utils.topology.constants import (
     TYPE_CROSS,
     TYPE_CUSTOMER,

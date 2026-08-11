@@ -2,11 +2,11 @@
 
 from tests.topology.conftest import chain_customer_fiber_olt
 from simpleworkernet.utils.topology.linear import LinearPathFinder
-from simpleworkernet.utils.topology.topology import Topology
+from simpleworkernet.utils.topology.topology import NetworkTopology
 
 
 def test_linear_trace_to_olt(client, cache):
-    topo = Topology(client, cache=cache)
+    topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
 
@@ -17,7 +17,7 @@ def test_linear_trace_to_olt(client, cache):
 
 
 def test_linear_requires_graphs(client):
-    topo = Topology(client)
+    topo = NetworkTopology(client)
     finder = LinearPathFinder(topo)
     try:
         finder.trace("customer", 1)
@@ -27,7 +27,7 @@ def test_linear_requires_graphs(client):
 
 
 def test_linear_splitter_requires_port(client, cache):
-    topo = Topology(client, cache=cache)
+    topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
     finder = LinearPathFinder(topo)
@@ -39,22 +39,24 @@ def test_linear_splitter_requires_port(client, cache):
 
 
 def test_linear_side_requires_side(client, cache):
-    topo = Topology(client, cache=cache)
+    topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
     finder = LinearPathFinder(topo)
     try:
-        finder.trace("fiber", 10, port=1)  # side не указан
+        finder.trace("fiber", 10, port=1)
         assert False
     except ValueError:
         pass
 
 
-def test_topology_from_commutation(client, cache):
-    topo = Topology(client, cache=cache)
+def test_linear_path_finder_on_synthetic_chain(client, cache):
+    """get_linear требует node_id на fiber; LinearPathFinder работает на синтетике."""
+    topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
 
-    linear_topo = topo.topology_from_commutation("customer", 1, port=0)
-    assert len(linear_topo.cgraphs) == 1
-    assert linear_topo.cgraphs[0].vcount() == 3
+    finder = LinearPathFinder(topo)
+    linear = finder.trace("customer", 1, port=0)
+    assert linear.vcount() == 3
+    assert linear.ecount() == 2
