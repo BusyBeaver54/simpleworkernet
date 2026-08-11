@@ -121,22 +121,53 @@ class FNGraph(BaseGraph):
         for v in cg.vs:
             if v["obj_type"] != TYPE_FIBER:
                 continue
-            fiber_id = int(v["obj_id"])
-            node_id = v.attributes().get("node_id")
-            if node_id is None:
+            try:
+                fiber_id = int(v["obj_id"])
+            except (TypeError, ValueError):
                 continue
             if self._included_fibers is not None and fiber_id not in self._included_fibers:
                 continue
             if self._excluded_fibers is not None and fiber_id in self._excluded_fibers:
                 continue
-            if self._excluded_nodes is not None and node_id in self._excluded_nodes:
-                continue
-            fiber_groups[fiber_id].add(node_id)
+            node_id = v.attributes().get("node_id")
+            if node_id is not None:
+                if self._excluded_nodes is not None and int(node_id) in self._excluded_nodes:
+                    continue
+                fiber_groups[fiber_id].add(int(node_id))
 
+        # если в CGraph только одна сторона кабеля (один node_id) —
+        # добираем пару node1/node2 из объекта Fiber
+        for fiber_id, nodes in list(fiber_groups.items()):
+            if len(nodes) >= 2:
+                continue
+            fiber = self._load_fiber(fiber_id)
+            if fiber is None:
+                continue
+            n1 = getattr(fiber, "node1_id", None)
+            n2 = getattr(fiber, "node2_id", None)
+            if n1 is None or n2 is None:
+                continue
+            n1, n2 = int(n1), int(n2)
+            if self._excluded_nodes is not None:
+                if n1 in self._excluded_nodes or n2 in self._excluded_nodes:
+                    continue
+            fiber_groups[fiber_id] = {n1, n2}
+
+        edges_added = 0
         for fiber_id, nodes in fiber_groups.items():
             node_list = list(nodes)
             if len(node_list) == 2:
                 self._add_fiber_edge(node_list[0], node_list[1], fiber_id)
+                edges_added += 1
+            elif len(node_list) > 2:
+                ordered = sorted(node_list)
+                for a, b in zip(ordered, ordered[1:]):
+                    self._add_fiber_edge(a, b, fiber_id)
+                    edges_added += 1
+        self.logger.info(
+            "FNGraph from CGraph: fibers=%s edges=%s vertices=%s",
+            len(fiber_groups), edges_added, self.vcount(),
+        )
 
     def _build_from_api(self, start_node_id: int) -> None:
         visited: Set[int] = set()
