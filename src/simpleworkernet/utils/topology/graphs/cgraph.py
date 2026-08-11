@@ -183,22 +183,25 @@ class CGraph(BaseGraph):
         self,
         object_type: str,
         object_id: Union[int, str],
-        port: Optional[int] = None,
+        port: Any = None,
         side: Optional[int] = None,
         included_fibers: Optional[Union[int, List[int], Set[int]]] = None,
         excluded_fibers: Optional[Union[int, List[int], Set[int]]] = None,
         excluded_nodes: Optional[Union[int, List[int], Set[int]]] = None,
         *,
         linear: bool = False,
+        linear_on_fail: str = "raise",
     ) -> "CGraph":
         """
         Строит граф от объекта.
 
         Делегирует BFS в builders (handlers).
 
-        linear=False (по умолчанию) — обычный обход.
-        linear=True — строить линейный граф; если однозначно нельзя
-        (ветвление и т.п.) — TopologyBuildError.
+        port: число, список, диапазон или строка (см. expand_ports).
+        linear=False — обычный обход.
+        linear=True — линейный граф; при неоднозначности:
+            linear_on_fail="raise" → TopologyBuildError,
+            linear_on_fail="continue" → строить дальше с пометкой нарушения.
         """
         from ..builders.base import GraphBuilder
 
@@ -212,7 +215,7 @@ class CGraph(BaseGraph):
             excluded_fibers=excluded_fibers,
             excluded_nodes=excluded_nodes,
             linear=bool(linear),
-            linear_on_fail="raise",
+            linear_on_fail=linear_on_fail if linear_on_fail in ("raise", "continue") else "raise",
         )
 
     def update_directed_flag(self) -> None:
