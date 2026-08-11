@@ -73,8 +73,8 @@ class CGraph(BaseGraph):
         if t == TYPE_FIBER:
             return self.cache.get_fiber(self.client, int(oid))
         if t == TYPE_CUSTOMER:
-            # для ускорения построений абонентов не тянем
-            return None
+            # при BFS API не дёргаем; если уже в кэше (preload/get_user_list) — отдаём
+            return self.cache.get_object(TYPE_CUSTOMER, oid)
         if t == TYPE_CWDM:
             return self.cache.get_cwdm(self.client, int(oid))
         return None

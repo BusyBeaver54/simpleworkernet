@@ -15,6 +15,7 @@ from .calculator_segments import (
 
 class AttenuationPathMixin:
     def _fiber_segments(self, fiber_vertex_attrs: dict) -> List[AttenuationSegment]:
+        fiber_vertex_attrs = self._ensure_api_obj(fiber_vertex_attrs)
         fiber_id = fiber_vertex_attrs.get("obj_id")
         length_m = fiber_vertex_attrs.get("length_m")
         length_source = fiber_vertex_attrs.get("length_source") or None
@@ -121,6 +122,7 @@ class AttenuationPathMixin:
     def _splitter_segments(
         self, splitter_vertex_attrs: dict, *, direction: str = "unknown", edge_side=None,
     ) -> List[AttenuationSegment]:
+        splitter_vertex_attrs = self._ensure_api_obj(splitter_vertex_attrs)
         splitter_id = splitter_vertex_attrs.get("obj_id")
         side = int(splitter_vertex_attrs.get("side") or edge_side or 0)
         port = int(splitter_vertex_attrs.get("port") or 0)
@@ -196,7 +198,7 @@ class AttenuationPathMixin:
         )]
 
     def _endpoint_from_vertex(self, vindex: int) -> EndpointInfo:
-        va = self._vertex_attrs(vindex)
+        va = self._ensure_api_obj(self._vertex_attrs(vindex))
         ot = str(va.get("obj_type") or "")
         oid = str(va.get("obj_id") or "")
         side = va.get("side")
