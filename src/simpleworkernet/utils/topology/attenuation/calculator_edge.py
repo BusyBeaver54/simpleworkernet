@@ -1,7 +1,7 @@
 # simpleworkernet/utils/topology/attenuation/calculator_edge.py
 """Edge → attenuation segments."""
 from __future__ import annotations
-from typing import List
+from typing import List, Optional, Set
 from ..constants import (
     TYPE_CROSS, TYPE_CUSTOMER, TYPE_FIBER, TYPE_OLT, TYPE_ONU,
     TYPE_RADIO, TYPE_SPLITTER, TYPE_SWITCH,
@@ -17,7 +17,9 @@ _TERMINAL_CONNECTOR_TYPES = frozenset({
 class AttenuationEdgeMixin:
     def _edge_segments(
         self, u: int, v: int, *, direction: str = "unknown",
+        path_endpoints: Optional[set] = None,
     ) -> List[AttenuationSegment]:
+        path_endpoints = path_endpoints or set()
         segs: List[AttenuationSegment] = []
         ua = self._vertex_attrs(u)
         va = self._vertex_attrs(v)
@@ -57,43 +59,66 @@ class AttenuationEdgeMixin:
             segs.extend(self._splitter_segments(out_v, direction=direction))
             return segs
 
+        # Внутренняя коммутация кросса (порт↔порт): путь идёт дальше → adapter
         if is_internal and ta == TYPE_CROSS and tb == TYPE_CROSS and ida == idb:
-            mode = self._cross_loss_mode()
-            if mode == "adapter":
-                if hasattr(self.catalog, "adapter_db_triple"):
-                    db_min, db, db_max = self.catalog.adapter_db_triple()
-                else:
-                    db = self.catalog.adapter_db(use_max=self.use_max)
-                    db_min = db_max = db
-                segs.append(AttenuationSegment(
-                    kind="adapter", db=db, db_min=db_min, db_max=db_max,
-                    description=(
-                        f"adapter cross:{ida} port={ua.get('port')} "
-                        f"(вход+выход={db} dB)"
-                    ),
-                    obj_type=TYPE_CROSS, obj_id=ida, port=ua.get("port"),
-                    wavelength_nm=self.wavelength, source="default",
-                    meta={"cross_loss_mode": mode},
-                ))
+            segs.append(self._cross_adapter_segment(
+                ua, cross_id=ida, connect_id=connect_id, reason="internal",
+            ))
             return segs
 
         if not is_internal:
-            segs.extend(self._external_joint_segments(ua, va, connect_id=connect_id))
+            segs.extend(self._external_joint_segments(
+                ua, va,
+                connect_id=connect_id,
+                path_endpoints=path_endpoints,
+                u_idx=u,
+                v_idx=v,
+            ))
         return segs
 
-    def _cross_loss_mode(self) -> str:
-        try:
-            if hasattr(self.catalog, "cross_loss_mode"):
-                return self.catalog.cross_loss_mode()
-        except Exception:
-            pass
-        try:
-            mode = self.catalog.defaults.get("cross_loss_mode")
-        except Exception:
-            mode = None
-        if mode in ("adapter", "connectors"):
-            return mode
-        return "adapter"
+    def _connector_db_triple(self):
+        if hasattr(self.catalog, "connector_db_triple"):
+            return self.catalog.connector_db_triple()
+        db = self.catalog.connector_db(use_max=self.use_max)
+        return db, db, db
+
+    def _adapter_db_triple(self):
+        if hasattr(self.catalog, "adapter_db_triple"):
+            return self.catalog.adapter_db_triple()
+        db = self.catalog.adapter_db(use_max=self.use_max)
+        return db, db, db
+
+    def _cross_adapter_segment(
+        self, cross_attrs: dict, *, cross_id, connect_id=None, reason: str = "",
+    ) -> AttenuationSegment:
+        db_min, db, db_max = self._adapter_db_triple()
+        return AttenuationSegment(
+            kind="adapter", db=db, db_min=db_min, db_max=db_max,
+            description=(
+                f"adapter cross:{cross_id} port={cross_attrs.get('port')} "
+                f"({reason or 'through'})"
+            ),
+            obj_type=TYPE_CROSS, obj_id=str(cross_id),
+            port=cross_attrs.get("port"),
+            wavelength_nm=self.wavelength, source="default",
+            meta={"connect_id": connect_id, "cross_loss": "adapter", "reason": reason},
+        )
+
+    def _cross_connector_segment(
+        self, cross_attrs: dict, other_attrs: dict, *, connect_id=None,
+    ) -> AttenuationSegment:
+        db_min, db, db_max = self._connector_db_triple()
+        other_label = self._terminal_label(other_attrs)
+        return AttenuationSegment(
+            kind="connector", db=db, db_min=db_min, db_max=db_max,
+            description=f"connector at cross:{cross_attrs.get('obj_id')} ↔ {other_label}",
+            obj_type=TYPE_CROSS,
+            obj_id=str(cross_attrs.get("obj_id")),
+            port=cross_attrs.get("port"),
+            obj_name=_obj_display_name(cross_attrs),
+            source="default", wavelength_nm=self.wavelength,
+            meta={"connect_id": connect_id, "cross_loss": "connector"},
+        )
 
     def _terminal_label(self, vattrs: dict) -> str:
         ot = vattrs.get("obj_type")
@@ -109,11 +134,15 @@ class AttenuationEdgeMixin:
 
     def _external_joint_segments(
         self, ua: dict, va: dict, *, connect_id=None,
+        path_endpoints: Optional[set] = None,
+        u_idx: Optional[int] = None,
+        v_idx: Optional[int] = None,
     ) -> List[AttenuationSegment]:
         ta, tb = ua.get("obj_type"), va.get("obj_type")
         ida, idb = str(ua.get("obj_id")), str(va.get("obj_id"))
         kinds = {ta, tb}
         meta = {"connect_id": connect_id}
+        path_endpoints = path_endpoints or set()
 
         if ta == TYPE_SPLITTER and tb == TYPE_SPLITTER and ida != idb:
             if hasattr(self.catalog, "splice_db_triple"):
@@ -130,34 +159,26 @@ class AttenuationEdgeMixin:
             )]
 
         if TYPE_CROSS in kinds:
-            if self._cross_loss_mode() == "connectors":
-                if hasattr(self.catalog, "connector_db_triple"):
-                    db_min, db, db_max = self.catalog.connector_db_triple()
-                else:
-                    db = self.catalog.connector_db(use_max=self.use_max)
-                    db_min = db_max = db
-                other = ua if tb == TYPE_CROSS else va
-                other_label = self._terminal_label(other)
-                return [AttenuationSegment(
-                    kind="connector", db=db, db_min=db_min, db_max=db_max,
-                    description=f"connector → cross ({other_label})",
-                    obj_type=TYPE_CROSS,
-                    obj_id=ida if ta == TYPE_CROSS else idb,
-                    obj_name=_obj_display_name(other),
-                    source="default", wavelength_nm=self.wavelength, meta=meta,
+            # Кросс — конец/начало пути расчёта → connector.
+            # Кросс промежуточный (путь идёт дальше) → adapter.
+            cross_is_endpoint = False
+            if ta == TYPE_CROSS and u_idx is not None and u_idx in path_endpoints:
+                cross_is_endpoint = True
+            if tb == TYPE_CROSS and v_idx is not None and v_idx in path_endpoints:
+                cross_is_endpoint = True
+
+            cross_attrs = ua if ta == TYPE_CROSS else va
+            other_attrs = va if ta == TYPE_CROSS else ua
+            cross_id = ida if ta == TYPE_CROSS else idb
+
+            if cross_is_endpoint:
+                return [self._cross_connector_segment(
+                    cross_attrs, other_attrs, connect_id=connect_id,
                 )]
-            if TYPE_FIBER in kinds:
-                if hasattr(self.catalog, "splice_db_triple"):
-                    db_min, db, db_max = self.catalog.splice_db_triple()
-                else:
-                    db = self.catalog.splice_db(use_max=self.use_max)
-                    db_min = db_max = db
-                return [AttenuationSegment(
-                    kind="splice", db=db, db_min=db_min, db_max=db_max,
-                    description="splice fiber↔cross",
-                    source="default", wavelength_nm=self.wavelength, meta=meta,
-                )]
-            return []
+            return [self._cross_adapter_segment(
+                cross_attrs, cross_id=cross_id, connect_id=connect_id,
+                reason="through",
+            )]
 
         terminal = kinds & _TERMINAL_CONNECTOR_TYPES
         if terminal:
