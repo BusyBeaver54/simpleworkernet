@@ -3,105 +3,214 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set, Tuple, Union
+from typing import List, Optional, Union
 
 from .constants import (
     DEVICE_TYPES,
     SIDE_TYPES,
     TERMINAL_TYPES,
-    TYPE_CROSS,
-    TYPE_CUSTOMER,
     TYPE_CWDM,
-    TYPE_FIBER,
     TYPE_OLT,
     TYPE_SPLITTER,
     TYPE_SWITCH,
 )
-from .errors import TopologyBuildError
 from .keys import Interface, ObjKey
 from .graphs.cgraph import CGraph
 
 
 class LinearPathFinder:
-    """Извлекает линейный подграф из уже построенных CGraph NetworkTopology."""
+    """
+    Строит линейный путь от last-объекта к first/корню (OLT|switch).
+
+    Предпочитает external-рёбра, иначе internal; при ветвлении — shortest_path.
+    """
 
     def __init__(self, topology) -> None:
         self.topology = topology
-        self.client = getattr(topology, "client", None)
-        self.cache = getattr(topology, "cache", None)
+        self.logger = topology.logger
 
-    def _require_graphs(self) -> List:
-        cgraphs = getattr(self.topology, "cgraphs", None) or []
-        if not cgraphs:
+    def trace(
+        self,
+        last_object_type: str,
+        last_object_id: Union[int, str],
+        port: Optional[int] = None,
+        side: Optional[int] = None,
+        first_object_type: Optional[str] = None,
+        first_object_id: Optional[Union[int, str]] = None,
+    ) -> CGraph:
+        if not self.topology.cgraphs:
             raise ValueError(
-                "Нет построенных CGraph. Сначала вызовите build_from_*"
+                "Нет построенных графов. Сначала вызовите build_from_*"
             )
-        return cgraphs
 
-    def _find_vertices(
-        self, cg, obj_type: str, obj_id, port=None, side=None,
-    ) -> List[int]:
-        oid = str(obj_id)
-        found: List[int] = []
-        for v in cg.vs:
-            attrs = v.attributes()
-            if attrs.get("obj_type") != obj_type:
-                continue
-            if str(attrs.get("obj_id")) != oid:
-                continue
-            if side is not None:
-                try:
-                    if int(attrs.get("side") or 0) != int(side):
+        if last_object_type == TYPE_SPLITTER and port is None:
+            raise ValueError("Для сплиттера порт обязателен")
+        if last_object_type in SIDE_TYPES and side is None:
+            raise ValueError(
+                f"Для объекта {last_object_type} необходимо указать сторону (side)"
+            )
+
+        last_key = ObjKey(last_object_type, last_object_id)
+
+        if last_object_type in TERMINAL_TYPES:
+            if port is None:
+                comms = self.topology._get_commutations(
+                    last_object_type, last_object_id
+                )
+                if len(comms) > 1 and (
+                    first_object_type is None or first_object_id is None
+                ):
+                    raise ValueError(
+                        f"Объект {last_object_type}:{last_object_id} имеет "
+                        "несколько коммутаций — укажите first_object"
+                    )
+                p = (
+                    int(comms[0].clps_first)
+                    if comms and comms[0].clps_first is not None
+                    else 1
+                )
+                last_iface = Interface(last_key, side=1, port=p)
+            else:
+                last_iface = Interface(last_key, side=1, port=port)
+        else:
+            if port is None or side is None:
+                raise ValueError("Для SIDE-объекта нужны port и side")
+            last_iface = Interface(last_key, side=side, port=port)
+
+        candidates = [
+            g for g in self.topology.cgraphs
+            if last_iface in getattr(g, "_vertex_index", {})
+        ]
+        if not candidates:
+            candidates = list(self.topology.cgraphs)
+        cg = candidates[0]
+
+        if last_iface not in cg._vertex_index:
+            # fallback: find by attributes
+            found = None
+            for iface, idx in cg._vertex_index.items():
+                if (
+                    iface.obj.obj_type == last_object_type
+                    and str(iface.obj.id) == str(last_object_id)
+                ):
+                    if port is not None and iface.port != port:
                         continue
-                except (TypeError, ValueError):
-                    continue
-            if port is not None:
-                try:
-                    if int(attrs.get("port") or 0) != int(port):
+                    if side is not None and iface.side != side:
                         continue
-                except (TypeError, ValueError):
-                    continue
-            found.append(int(v.index))
-        return found
+                    found = iface
+                    break
+            if found is None:
+                raise ValueError(
+                    f"Объект {last_object_type}:{last_object_id} не найден в CGraph"
+                )
+            last_iface = found
 
-    def _pick_cgraph(self, obj_type, obj_id, port, side):
-        for cg in self._require_graphs():
-            if self._find_vertices(cg, obj_type, obj_id, port, side):
-                return cg
-        return self._require_graphs()[0]
+        path = self._walk(
+            cg, last_iface, first_object_type, first_object_id
+        )
+        return self._build_linear(cg, path)
 
-    def _walk(self, cg, start: int) -> List[int]:
-        path = [start]
+    def _walk(
+        self,
+        cg: CGraph,
+        start: Interface,
+        first_type: Optional[str],
+        first_id: Optional[Union[int, str]],
+    ) -> List[Interface]:
+        path: List[Interface] = [start]
         prev = None
-        cur = start
+        current = start
+
         for _ in range(10000):
-            nbrs = [
-                int(n) for n in cg.neighbors(cur)
-                if prev is None or int(n) != prev
-            ]
-            if not nbrs:
+            cur_idx = cg._vertex_index.get(current)
+            if cur_idx is None:
                 break
-            if len(nbrs) > 1:
+
+            external = []
+            internal = []
+            for eid in cg.incident(cur_idx, mode="all"):
+                e = cg.es[eid]
+                src, tgt = e.source, e.target
+                other = tgt if src == cur_idx else src
+                if prev is not None and other == cg._vertex_index.get(prev):
+                    continue
+                is_internal = bool(e.attributes().get("is_internal"))
+                other_iface = None
+                for iface, i in cg._vertex_index.items():
+                    if i == other:
+                        other_iface = iface
+                        break
+                if other_iface is None:
+                    continue
+                (internal if is_internal else external).append(other_iface)
+
+            candidates = external or internal
+            if not candidates:
                 break
-            nxt = nbrs[0]
-            path.append(nxt)
-            prev, cur = cur, nxt
+            if len(candidates) > 1:
+                return self._shortest(
+                    cg, cur_idx, path, first_type, first_id
+                )
+
+            next_iface = candidates[0]
+            path.append(next_iface)
+
+            nt = next_iface.obj.obj_type
+            if nt in (TYPE_OLT, TYPE_SWITCH):
+                break
+            if (
+                first_type is not None
+                and first_id is not None
+                and nt == first_type
+                and str(next_iface.obj.id) == str(first_id)
+            ):
+                break
+            prev, current = current, next_iface
+
         return path
 
-    def _induced_linear(self, source: CGraph, path_indices: List[int]) -> CGraph:
-        """Индуцированный подграф с сохранением атрибутов и _vertex_index."""
-        linear = CGraph(self.client, cache=self.cache)
+    def _shortest(
+        self,
+        cg: CGraph,
+        from_idx: int,
+        path_so_far: List[Interface],
+        first_type: Optional[str],
+        first_id: Optional[Union[int, str]],
+    ) -> List[Interface]:
+        if not first_type or first_id is None:
+            raise ValueError(
+                "Ветвление: укажите first_object для выбора направления"
+            )
+        target_idx = None
+        for v in cg.vs:
+            if v["obj_type"] == first_type and str(v["obj_id"]) == str(first_id):
+                target_idx = v.index
+                break
+        if target_idx is None:
+            raise ValueError(f"Целевой объект {first_type}:{first_id} не найден")
+
+        paths = cg.get_shortest_paths(from_idx, target_idx, mode="all")
+        if not paths or not paths[0]:
+            raise ValueError("Путь не найден")
+
+        result = list(path_so_far)
+        for idx in paths[0][1:]:
+            for iface, i in cg._vertex_index.items():
+                if i == idx:
+                    result.append(iface)
+                    break
+        return result
+
+    def _build_linear(self, source: CGraph, path: List[Interface]) -> CGraph:
+        linear = CGraph(self.topology.client, cache=self.topology.cache)
         index_map = {}
+        path_indices = [source._vertex_index[iface] for iface in path]
+
         for idx in path_indices:
             attrs = {k: source.vs[idx][k] for k in source.vs[idx].attributes()}
-            new_idx = linear.add_vertex(**attrs)
-            # igraph may return VertexSeq-like; normalize
-            try:
-                new_idx = int(new_idx)
-            except (TypeError, ValueError):
-                new_idx = linear.vcount() - 1
+            new_idx = linear.add_vertex(**attrs).index
             index_map[idx] = new_idx
-            for iface, i in getattr(source, "_vertex_index", {}).items():
+            for iface, i in source._vertex_index.items():
                 if i == idx:
                     linear._vertex_index[iface] = new_idx
                     break
@@ -117,39 +226,5 @@ class LinearPathFinder:
                 }
                 linear.add_edge(index_map[a], index_map[b], **e_attrs)
 
-        if hasattr(linear, "update_directed_flag"):
-            linear.update_directed_flag()
+        linear.update_directed_flag()
         return linear
-
-    def trace(
-        self,
-        start_type: str,
-        start_id: Union[int, str],
-        *,
-        port: Optional[int] = None,
-        side: Optional[int] = None,
-        cgraph_index: Optional[int] = None,
-    ) -> CGraph:
-        """Линейный CGraph от стартового объекта до ветвления / конца."""
-        cgraphs = self._require_graphs()
-
-        if start_type in (TYPE_SPLITTER, TYPE_CWDM) and port is None:
-            raise ValueError("Для splitter/cwdm необходимо указать порт")
-        if start_type in (TYPE_FIBER, TYPE_CROSS) and side is None:
-            raise ValueError("Для fiber/cross необходимо указать side")
-
-        if cgraph_index is not None:
-            if cgraph_index < 0 or cgraph_index >= len(cgraphs):
-                raise ValueError(f"cgraph_index={cgraph_index} вне диапазона")
-            cg = cgraphs[cgraph_index]
-        else:
-            cg = self._pick_cgraph(start_type, start_id, port, side)
-
-        starts = self._find_vertices(cg, start_type, start_id, port, side)
-        if not starts:
-            raise ValueError(
-                f"Объект {start_type}:{start_id} не найден в CGraph"
-            )
-
-        path = self._walk(cg, starts[0])
-        return self._induced_linear(cg, path)
