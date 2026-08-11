@@ -110,8 +110,8 @@ from simpleworkernet import WorkerNetClient
 from simpleworkernet.utils.graphics import SVGHandler, svg_to_png
 
 client = WorkerNetClient(...)
-# получить SVG схемы узла / коммутации через API Map (см. client.Map)
-raw = client.Map.get_scheme(...)   # bytes или str — зависит от метода API
+# получить SVG схемы узла / коммутации через API Node 
+raw = client.Node.get_scheme(...)   # bytes
 
 svg = SVGHandler(raw)
 svg.save_auto(prefix=f"node_{node_id}")
