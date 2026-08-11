@@ -4,10 +4,6 @@
 
 ```text
 src/
-├── assets/
-│   ├── badge.svg
-│   └── social_preview.jpg
-│
 └── simpleworkernet/
     ├── __init__.py
     ├── __main__.py
