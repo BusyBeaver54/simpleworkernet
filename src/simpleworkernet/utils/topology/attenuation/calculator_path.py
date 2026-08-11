@@ -15,13 +15,13 @@ from .calculator_segments import (
 
 class AttenuationPathMixin:
     def _fiber_core_info(self, fiber_vertex_attrs: dict) -> dict:
-        """Номер ОВ, id волокна и модуль для сегмента/endpoint fiber.
+        """Номер ОВ, id волокна, цвет и модуль для сегмента/endpoint fiber.
 
         В графе port вершины fiber — clps_mid из коммутации (часто номер ОВ,
         иногда id волокна). Нормализуем:
           port      → номер ОВ (number)
-          port_name → m{module}f{number}  (например m1f5)
-          meta      → fiber_core_id, module, fiber_number
+          port_name → Color.name волокна (Fiber.Get_list.fibers.color.name)
+          meta      → fiber_core_id, module, fiber_number, module_fiber (m1f5)
         """
         raw_port = fiber_vertex_attrs.get("port")
         try:
@@ -41,20 +41,39 @@ class AttenuationPathMixin:
         if not fibers and getattr(self, "client", None) is not None:
             fid = fiber_vertex_attrs.get("obj_id")
             try:
-                result = self.client.Fiber.get_fiber(fiber_id=int(fid))
+                # предпочтительно Get_list — там есть Color.name
+                result = None
+                if hasattr(self, "cache") and self.cache is not None:
+                    try:
+                        cached = self.cache.get_fiber(self.client, int(fid))
+                        if cached is not None:
+                            result = cached
+                    except Exception:
+                        pass
+                if result is None:
+                    result = self.client.Fiber.get_list(object_id=int(fid))
+                    if result is not None:
+                        if hasattr(result, "to_list") and callable(result.to_list):
+                            items = result.to_list()
+                            result = items[0] if items else None
+                        elif isinstance(result, (list, tuple)):
+                            result = result[0] if result else None
                 if result is not None:
-                    if hasattr(result, "to_list") and callable(result.to_list):
-                        fibers = result.to_list()
-                    elif isinstance(result, (list, tuple)):
-                        fibers = list(result)
-                    else:
-                        fibers = [result]
+                    fibers = (
+                        getattr(result, "fibers", None)
+                        if not isinstance(result, dict)
+                        else result.get("fibers")
+                    )
+                    if fibers and obj is None:
+                        fiber_vertex_attrs = dict(fiber_vertex_attrs)
+                        fiber_vertex_attrs["api_obj"] = result
             except Exception:
                 fibers = None
 
         core_id = None
         number = None
         module = None
+        color_name = None
         matched = None
 
         def _f_attr(f, *names, default=None):
@@ -70,6 +89,19 @@ class AttenuationPathMixin:
                 if v not in (None, ""):
                     return v
             return default
+
+        def _color_name(f) -> Optional[str]:
+            """Fiber.Get_list.Fibers.Color.name"""
+            color = _f_attr(f, "color", "Color")
+            if color is None:
+                return None
+            if isinstance(color, str):
+                s = color.strip()
+                return s or None
+            name = _f_attr(color, "name", "Name")
+            if name not in (None, ""):
+                return str(name).strip() or None
+            return None
 
         if fibers and raw_port_i is not None:
             # 1) по id волокна
@@ -102,6 +134,7 @@ class AttenuationPathMixin:
             except (TypeError, ValueError):
                 number = None
             module = self._fiber_module_index(matched, fibers)
+            color_name = _color_name(matched)
         elif raw_port_i is not None:
             # нет списка волокон: если port небольшой — считаем номером ОВ
             if raw_port_i < 10000:
@@ -109,16 +142,24 @@ class AttenuationPathMixin:
             else:
                 core_id = raw_port_i
 
-        port_name = None
+        # port_name = цвет волокна; m{module}f{number} — в meta
+        module_fiber = None
         if number is not None and module is not None:
-            port_name = f"m{module}f{number}"
+            module_fiber = f"m{module}f{number}"
         elif number is not None:
-            port_name = f"f{number}"
+            module_fiber = f"f{number}"
+
+        port_name = color_name
+        if not port_name and module_fiber:
+            # fallback, если цвета нет в данных
+            port_name = module_fiber
 
         return {
             "fiber_number": number,
             "fiber_core_id": core_id,
             "module": module,
+            "color_name": color_name,
+            "module_fiber": module_fiber,
             "port_name": port_name,
             "port": number if number is not None else raw_port_i,
         }
@@ -217,6 +258,8 @@ class AttenuationPathMixin:
             "fiber_core_id": core.get("fiber_core_id"),
             "fiber_number": core.get("fiber_number"),
             "module": core.get("module"),
+            "color_name": core.get("color_name"),
+            "module_fiber": core.get("module_fiber"),
         }
         if length_m is None:
             return [AttenuationSegment(
@@ -377,7 +420,12 @@ class AttenuationPathMixin:
         host = _olt_host(va) if ot in _dev else None
         port_name = va.get("port_name")
         obj = va.get("api_obj")
-        if port_name is None and obj is not None and port_i is not None:
+        # OLT/switch/onu/radio: port_name из Device.Get_data.ifaces.ifName
+        if ot in _dev and port_i is not None:
+            resolved = self._device_port_name(obj, port_i)
+            if resolved:
+                port_name = resolved
+        elif port_name is None and obj is not None and port_i is not None:
             port_name = self._device_port_name(obj, port_i)
         commutation_index = None
         if ot == TYPE_CUSTOMER:
@@ -400,6 +448,10 @@ class AttenuationPathMixin:
                 meta["fiber_number"] = core["fiber_number"]
             if core.get("module") is not None:
                 meta["module"] = core["module"]
+            if core.get("color_name"):
+                meta["color_name"] = core["color_name"]
+            if core.get("module_fiber"):
+                meta["module_fiber"] = core["module_fiber"]
         return EndpointInfo(
             obj_type=ot, obj_id=oid,
             obj_name=str(name) if name else None,
@@ -411,28 +463,73 @@ class AttenuationPathMixin:
         )
 
     def _device_port_name(self, obj: Any, port: int) -> Optional[str]:
+        """Имя порта устройства из Device.Get_data.ifaces.ifName.
+
+        Сопоставление по ifNumber / ifIndex / position.
+        """
         if obj is None:
             return None
-        for attr in ("ports", "ifaces", "interfaces", "port_list"):
+
+        def _entry_name(entry) -> Optional[str]:
+            if entry is None:
+                return None
+            if isinstance(entry, str):
+                s = entry.strip()
+                return s or None
+            if isinstance(entry, dict):
+                for key in ("ifName", "if_name", "name", "title", "label", "caption", "ifDescr"):
+                    v = entry.get(key)
+                    if v not in (None, ""):
+                        return str(v).strip() or None
+                return None
+            for key in ("ifName", "if_name", "name", "title", "label", "caption", "ifDescr"):
+                v = getattr(entry, key, None)
+                if v not in (None, ""):
+                    return str(v).strip() or None
+            return None
+
+        def _entry_nums(entry) -> list:
+            nums = []
+            if isinstance(entry, dict):
+                keys = ("ifNumber", "if_number", "ifIndex", "if_index", "number", "port", "id", "index", "position")
+                for k in keys:
+                    v = entry.get(k)
+                    if v is not None:
+                        try:
+                            nums.append(int(v))
+                        except (TypeError, ValueError):
+                            pass
+            else:
+                for k in ("ifNumber", "if_number", "ifIndex", "if_index", "number", "port", "id", "index", "position"):
+                    v = getattr(entry, k, None)
+                    if v is not None:
+                        try:
+                            nums.append(int(v))
+                        except (TypeError, ValueError):
+                            pass
+            return nums
+
+        for attr in ("ifaces", "interfaces", "ports", "port_list"):
             ports = getattr(obj, attr, None) if not isinstance(obj, dict) else obj.get(attr)
             if not ports:
                 continue
             if isinstance(ports, dict):
                 entry = ports.get(port) or ports.get(str(port))
-                if isinstance(entry, dict):
-                    return entry.get("name") or entry.get("title") or entry.get("label")
-                if isinstance(entry, str):
-                    return entry
-            if isinstance(ports, list):
+                name = _entry_name(entry)
+                if name:
+                    return name
+                # поиск по значениям
+                for entry in ports.values():
+                    if port in _entry_nums(entry):
+                        name = _entry_name(entry)
+                        if name:
+                            return name
+            if isinstance(ports, (list, tuple)):
                 for p in ports:
-                    if not isinstance(p, dict):
-                        continue
-                    num = p.get("number") or p.get("port") or p.get("id") or p.get("index")
-                    try:
-                        if int(num) == int(port):
-                            return p.get("name") or p.get("title") or p.get("label")
-                    except (TypeError, ValueError):
-                        continue
+                    if port in _entry_nums(p):
+                        name = _entry_name(p)
+                        if name:
+                            return name
         return None
 
     def _customer_commutation_index(self, vattrs: dict, port: Optional[int]) -> Optional[int]:
