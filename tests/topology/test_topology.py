@@ -1,4 +1,4 @@
-"""Тесты оркестратора Topology (без реального API)."""
+"""Тесты оркестратора NetworkTopology (без реального API)."""
 
 import os
 import tempfile
@@ -7,7 +7,7 @@ from tests.topology.conftest import chain_customer_fiber_olt
 from simpleworkernet.utils.topology.graphs.cgraph import CGraph
 from simpleworkernet.utils.topology.graphs.fngraph import FNGraph
 from simpleworkernet.utils.topology.keys import Interface, ObjKey
-from simpleworkernet.utils.topology.topology import Topology, _normalize_set
+from simpleworkernet.utils.topology.topology import NetworkTopology, _normalize_set
 
 
 def test_normalize_set():
@@ -23,7 +23,7 @@ def test_topology_init(topology):
 
 
 def test_topology_repr(topology):
-    assert "Topology" in repr(topology)
+    assert "NetworkTopology" in repr(topology)
 
 
 def test_add_cgraph_rejects_empty(topology, empty_cgraph):
@@ -38,7 +38,7 @@ def test_add_cgraph_connected(topology, client, cache):
 
 
 def test_getters(client, cache):
-    topo = Topology(client, cache=cache)
+    topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
 
@@ -48,7 +48,7 @@ def test_getters(client, cache):
 
 
 def test_get_nodes_cables_from_fngraph(client, cache):
-    topo = Topology(client, cache=cache)
+    topo = NetworkTopology(client, cache=cache)
     fn = FNGraph(client, cache=cache)
     fn._add_node_vertex(1)
     fn._add_node_vertex(2)
@@ -60,7 +60,7 @@ def test_get_nodes_cables_from_fngraph(client, cache):
 
 
 def test_save_load_roundtrip(client, cache):
-    topo = Topology(client, cache=cache)
+    topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
     client._url = "https://example.test"
@@ -71,7 +71,7 @@ def test_save_load_roundtrip(client, cache):
         topo.save_to_file(path)
         assert os.path.isfile(path)
 
-        loaded = Topology.load_from_file(path)
+        loaded = NetworkTopology.load_from_file(path)
         assert len(loaded.cgraphs) == 1
         assert loaded.cgraphs[0].vcount() == 3
 

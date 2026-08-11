@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import pytest
 
-from simpleworkernet.utils.topology import Topology, DataCache
+from simpleworkernet.utils.topology import NetworkTopology, DataCache
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
 def topology(live_client):
-    return Topology(live_client, cache=DataCache())
+    return NetworkTopology(live_client, cache=DataCache())
 
 
 def test_topology_build_from_node_if_configured(topology, node_id):

@@ -9,7 +9,7 @@ from simpleworkernet.utils.topology.cache import DataCache
 from simpleworkernet.utils.topology.graphs.cgraph import CGraph
 from simpleworkernet.utils.topology.graphs.fngraph import FNGraph
 from simpleworkernet.utils.topology.keys import Interface, ObjKey
-from simpleworkernet.utils.topology.topology import Topology
+from simpleworkernet.utils.topology.topology import NetworkTopology
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def empty_fngraph(client, cache):
 
 @pytest.fixture
 def topology(client, cache):
-    return Topology(client, cache=cache)
+    return NetworkTopology(client, cache=cache)
 
 
 def make_comm(
