@@ -14,6 +14,155 @@ from .calculator_segments import (
 
 
 class AttenuationPathMixin:
+    def _fiber_core_info(self, fiber_vertex_attrs: dict) -> dict:
+        """Номер ОВ, id волокна и модуль для сегмента/endpoint fiber.
+
+        В графе port вершины fiber — clps_mid из коммутации (часто номер ОВ,
+        иногда id волокна). Нормализуем:
+          port      → номер ОВ (number)
+          port_name → m{module}f{number}  (например m1f5)
+          meta      → fiber_core_id, module, fiber_number
+        """
+        raw_port = fiber_vertex_attrs.get("port")
+        try:
+            raw_port_i = int(raw_port) if raw_port is not None else None
+        except (TypeError, ValueError):
+            raw_port_i = None
+
+        obj = fiber_vertex_attrs.get("api_obj")
+        fibers = None
+        if obj is not None:
+            fibers = (
+                getattr(obj, "fibers", None)
+                if not isinstance(obj, dict)
+                else obj.get("fibers")
+            )
+        # точечная подгрузка списка ОВ, если в api_obj нет fibers
+        if not fibers and getattr(self, "client", None) is not None:
+            fid = fiber_vertex_attrs.get("obj_id")
+            try:
+                result = self.client.Fiber.get_fiber(fiber_id=int(fid))
+                if result is not None:
+                    if hasattr(result, "to_list") and callable(result.to_list):
+                        fibers = result.to_list()
+                    elif isinstance(result, (list, tuple)):
+                        fibers = list(result)
+                    else:
+                        fibers = [result]
+            except Exception:
+                fibers = None
+
+        core_id = None
+        number = None
+        module = None
+        matched = None
+
+        def _f_attr(f, *names, default=None):
+            if f is None:
+                return default
+            if isinstance(f, dict):
+                for n in names:
+                    if n in f and f[n] not in (None, ""):
+                        return f[n]
+                return default
+            for n in names:
+                v = getattr(f, n, None)
+                if v not in (None, ""):
+                    return v
+            return default
+
+        if fibers and raw_port_i is not None:
+            # 1) по id волокна
+            for f in fibers:
+                fid = _f_attr(f, "id")
+                try:
+                    if fid is not None and int(fid) == raw_port_i:
+                        matched = f
+                        break
+                except (TypeError, ValueError):
+                    continue
+            # 2) по номеру ОВ
+            if matched is None:
+                for f in fibers:
+                    num = _f_attr(f, "number", "port")
+                    try:
+                        if num is not None and int(num) == raw_port_i:
+                            matched = f
+                            break
+                    except (TypeError, ValueError):
+                        continue
+
+        if matched is not None:
+            try:
+                core_id = int(_f_attr(matched, "id")) if _f_attr(matched, "id") is not None else None
+            except (TypeError, ValueError):
+                core_id = None
+            try:
+                number = int(_f_attr(matched, "number", "port")) if _f_attr(matched, "number", "port") is not None else None
+            except (TypeError, ValueError):
+                number = None
+            module = self._fiber_module_index(matched, fibers)
+        elif raw_port_i is not None:
+            # нет списка волокон: если port небольшой — считаем номером ОВ
+            if raw_port_i < 10000:
+                number = raw_port_i
+            else:
+                core_id = raw_port_i
+
+        port_name = None
+        if number is not None and module is not None:
+            port_name = f"m{module}f{number}"
+        elif number is not None:
+            port_name = f"f{number}"
+
+        return {
+            "fiber_number": number,
+            "fiber_core_id": core_id,
+            "module": module,
+            "port_name": port_name,
+            "port": number if number is not None else raw_port_i,
+        }
+
+    def _fiber_module_index(self, fiber, fibers) -> Optional[int]:
+        """Порядковый номер модуля (1-based) по moduleColor / module_color_id."""
+        if fiber is None or not fibers:
+            return None
+
+        def _key(f):
+            if isinstance(f, dict):
+                mc = f.get("moduleColor") or f.get("module_color")
+                mid = f.get("module_color_id") or f.get("module_id")
+            else:
+                mc = getattr(f, "moduleColor", None) or getattr(f, "module_color", None)
+                mid = getattr(f, "module_color_id", None) or getattr(f, "module_id", None)
+            if mid not in (None, ""):
+                return ("id", str(mid))
+            if mc is not None:
+                if isinstance(mc, dict):
+                    code = mc.get("htmlCode") or mc.get("name") or mc.get("tag_color")
+                else:
+                    code = (
+                        getattr(mc, "htmlCode", None)
+                        or getattr(mc, "name", None)
+                        or getattr(mc, "tag_color", None)
+                    )
+                if code not in (None, ""):
+                    return ("color", str(code))
+            return None
+
+        order = []
+        seen = set()
+        for f in fibers:
+            k = _key(f)
+            if k is None or k in seen:
+                continue
+            seen.add(k)
+            order.append(k)
+        fk = _key(fiber)
+        if fk is None or fk not in order:
+            return 1 if order else None
+        return order.index(fk) + 1
+
     def _fiber_segments(self, fiber_vertex_attrs: dict) -> List[AttenuationSegment]:
         fiber_vertex_attrs = self._ensure_api_obj(fiber_vertex_attrs)
         fiber_id = fiber_vertex_attrs.get("obj_id")
@@ -59,7 +208,16 @@ class AttenuationPathMixin:
             src = "default"
         name_part = f" {cable_name}" if cable_name else ""
         side = fiber_vertex_attrs.get("side")
-        port = fiber_vertex_attrs.get("port")
+        core = self._fiber_core_info(fiber_vertex_attrs)
+        port = core.get("port")
+        port_name = core.get("port_name")
+        meta_base = {
+            "cable_name": cable_name,
+            "length_source": length_source,
+            "fiber_core_id": core.get("fiber_core_id"),
+            "fiber_number": core.get("fiber_number"),
+            "module": core.get("module"),
+        }
         if length_m is None:
             return [AttenuationSegment(
                 kind="fiber", db=0.0,
@@ -67,8 +225,9 @@ class AttenuationPathMixin:
                 obj_type=TYPE_FIBER, obj_id=str(fiber_id), obj_name=cable_name,
                 side=int(side) if side is not None else None,
                 port=int(port) if port is not None else None,
+                port_name=str(port_name) if port_name else None,
                 wavelength_nm=self.wavelength, source=src, length_source=length_source,
-                meta={"cable_name": cable_name, "length_source": length_source},
+                meta=meta_base,
             )]
         km = float(length_m) / 1000.0
         db, db_min, db_max = km * float(db_km), km * float(db_min_km), km * float(db_max_km)
@@ -81,12 +240,14 @@ class AttenuationPathMixin:
             obj_type=TYPE_FIBER, obj_id=str(fiber_id), obj_name=cable_name,
             side=int(side) if side is not None else None,
             port=int(port) if port is not None else None,
+            port_name=str(port_name) if port_name else None,
             length_m=float(length_m), length_source=length_source,
             wavelength_nm=self.wavelength, source=src,
             meta={
-                "cable_name": cable_name, "db_per_km": db_km,
-                "db_per_km_min": db_min_km, "db_per_km_max": db_max_km,
-                "length_source": length_source,
+                **meta_base,
+                "db_per_km": db_km,
+                "db_per_km_min": db_min_km,
+                "db_per_km_max": db_max_km,
             },
         )]
 
@@ -228,6 +389,17 @@ class AttenuationPathMixin:
                 meta["cable_name"] = cn
                 if not name:
                     name = cn
+            core = self._fiber_core_info(va)
+            if core.get("port") is not None:
+                port_i = int(core["port"])
+            if core.get("port_name"):
+                port_name = core["port_name"]
+            if core.get("fiber_core_id") is not None:
+                meta["fiber_core_id"] = core["fiber_core_id"]
+            if core.get("fiber_number") is not None:
+                meta["fiber_number"] = core["fiber_number"]
+            if core.get("module") is not None:
+                meta["module"] = core["module"]
         return EndpointInfo(
             obj_type=ot, obj_id=oid,
             obj_name=str(name) if name else None,
