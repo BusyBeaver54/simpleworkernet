@@ -54,16 +54,22 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         if cgraph is None or cgraph.vcount() == 0:
             return
         if not cgraph.is_connected():
-            self.logger.warning("Граф не связный, не добавляем")
-            return
+            # Несколько стартовых портов (port=[19,20]) часто дают 2+ компоненты —
+            # граф всё равно полезен (и нужен для FNGraph).
+            self.logger.warning(
+                "CGraph не связный (v=%s e=%s) — добавляем как есть",
+                cgraph.vcount(), cgraph.ecount(),
+            )
         self.cgraphs.append(cgraph)
 
     def _set_fngraph(self, fngraph: Optional[FNGraph]) -> None:
         if fngraph is None or fngraph.vcount() == 0:
             return
         if not fngraph.is_connected():
-            self.logger.warning("FNGraph не связный, не устанавливаем")
-            return
+            self.logger.warning(
+                "FNGraph не связный (v=%s e=%s) — устанавливаем как есть",
+                fngraph.vcount(), fngraph.ecount(),
+            )
         self.fngraph = fngraph
 
     def _build_fngraph_from_cgraph(self, cgraph: CGraph) -> Optional[FNGraph]:
@@ -71,7 +77,14 @@ class NetworkTopology(NetworkTopologyBuildMixin):
             return None
         fn = FNGraph(self.client, commutation_graph=cgraph, cache=self.cache)
         fn.build(0)
-        return fn if fn.vcount() > 0 else None
+        if fn.vcount() == 0:
+            self.logger.warning(
+                "FNGraph пустой после CGraph (cgraph v=%s e=%s) — "
+                "нет fiber-вершин с node_id / node1/node2",
+                cgraph.vcount(), cgraph.ecount(),
+            )
+            return None
+        return fn
 
     def _build_cgraph(
         self, obj_type, obj_id, port=None, side=None,
@@ -85,8 +98,16 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                 included_fibers=included_fibers, excluded_fibers=excluded_fibers,
                 excluded_nodes=excluded_nodes, linear=linear, linear_on_fail=linear_on_fail,
             )
-            if cg.vcount() == 0 or not cg.is_connected():
+            if cg.vcount() == 0:
+                self.logger.warning(
+                    "CGraph пустой от %s:%s (port=%r)", obj_type, obj_id, port
+                )
                 return None
+            if not cg.is_connected():
+                self.logger.warning(
+                    "CGraph от %s:%s не связный (v=%s e=%s) — оставляем",
+                    obj_type, obj_id, cg.vcount(), cg.ecount(),
+                )
             return cg
         except Exception as e:
             self.logger.error(f"Ошибка построения CGraph от {obj_type}:{obj_id}: {e}")
