@@ -1,17 +1,812 @@
-# -*- coding: utf-8 -*-
-# DataCache (self-contained; no external part files)
-from __future__ import annotations
-import base64
-import zlib
+"""
+DataCache — слой загрузки и кэширования объектов/коммутаций API.
 
-_DATA = (
-    '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'
+Не синглтон: создаётся явно (или через NetworkTopology).
+Можно шарить один экземпляр между несколькими NetworkTopology.
+
+Фоновая предзагрузка get_all_* — параллельные потоки (I/O-bound;
+объекты API не pickle-ятся в отдельные процессы). Основной код
+продолжает работу; результат подхватывается из _all_objects.
+"""
+
+from __future__ import annotations
+
+import threading
+from concurrent.futures import ThreadPoolExecutor, Future
+from contextlib import contextmanager
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+
+from ...core.client import WorkerNetClient
+from .constants import (
+    DEVICE_TYPES,
+    TYPE_CROSS,
+    TYPE_CUSTOMER,
+    TYPE_CWDM,
+    TYPE_FIBER,
+    TYPE_OLT,
+    TYPE_SPLITTER,
+    TYPE_SWITCH,
 )
-_src = zlib.decompress(base64.b64decode("".join(_DATA))).decode("utf-8")
-_g = globals()
-_g["__package__"] = __package__ or "simpleworkernet.utils.topology"
-_g["__name__"] = __name__
-_g["__file__"] = __file__
-exec(compile(_src, __file__, "exec"), _g)
+
+_logger = None
+_tls = threading.local()
+
+
+def _get_logger():
+    global _logger
+    if _logger is None:
+        from ...core.logger import log
+
+        _logger = log
+    return _logger
+
+
+def _loading_types() -> set:
+    """Типы, которые текущий поток уже загружает (защита от deadlock preload)."""
+    s = getattr(_tls, "loading_types", None)
+    if s is None:
+        s = set()
+        _tls.loading_types = s
+    return s
+
+
+@contextmanager
+def _temporary_timeout(seconds: Optional[int]):
+    """Временно поднять default_timeout клиента для долгих get_all_*."""
+    if seconds is None or seconds <= 0:
+        yield
+        return
+    try:
+        from ...core.config import config_manager
+        old = config_manager.default_timeout
+        config_manager.default_timeout = int(seconds)
+        try:
+            yield
+        finally:
+            config_manager.default_timeout = old
+    except Exception:
+        yield
+
+
+class DataCache:
+    """
+    Кэш объектов и коммутаций.
+
+    Хранит:
+    - _objects: {(тип, id): объект}
+    - _commutations: {(тип, id): [коммутации]}
+    - _all_objects: {тип: {id: объект}} — массовая загрузка
+    - _inventory / _inventory_catalog — ТМЦ для сплиттеров
+    - _fiber_lengths: {fiber_id: (length_m, source)}
+    - _geo_lengths: {fiber_id: m}
+    - _cable_catalog: catalog_cables_get
+    """
+
+    def __init__(
+        self,
+        client: Optional[WorkerNetClient] = None,
+        *,
+        preload: Optional[bool] = None,
+        preload_types: Optional[Sequence[str]] = None,
+        preload_customers: Optional[bool] = None,
+    ) -> None:
+        self._objects: Dict[Tuple[str, Union[int, str]], Any] = {}
+        self._commutations: Dict[Tuple[str, Union[int, str]], List[Any]] = {}
+        self._all_objects: Dict[str, Dict[Union[int, str], Any]] = {}
+        self._inventory: Dict[Union[int, str], Any] = {}
+        self._inventory_catalog: Dict[Union[int, str], Any] = {}
+        self._fiber_lengths: Dict[Union[int, str], Tuple[Optional[float], str]] = {}
+        self._geo_lengths: Dict[int, Optional[float]] = {}
+        self._cable_catalog: Optional[List[Any]] = None
+
+        self._lock = threading.RLock()
+        self._preload_futures: Dict[str, Future] = {}
+        self._preload_executor: Optional[ThreadPoolExecutor] = None
+
+        try:
+            from ...core.config import config_manager
+            default_preload = bool(config_manager.preload_on_init)
+        except Exception:
+            default_preload = False
+        do_preload = preload if preload is not None else default_preload
+        if client is not None and do_preload:
+            self.preload_async(
+                client,
+                types=preload_types,
+                include_customers=preload_customers,
+            )
+
+    # ------------------------------------------------------------------
+    # timeout helpers
+    # ------------------------------------------------------------------
+
+    def _bulk_timeout(self, object_type: str) -> int:
+        try:
+            from ...core.config import config_manager
+            if object_type == TYPE_CUSTOMER:
+                return int(
+                    config_manager.customer_list_timeout
+                    or config_manager.bulk_timeout
+                    or 300
+                )
+            return int(config_manager.bulk_timeout or 120)
+        except Exception:
+            return 120 if object_type != TYPE_CUSTOMER else 300
+
+    # ------------------------------------------------------------------
+    # objects / commutations
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _id_variants(obj_id: Union[int, str]) -> List[Union[int, str]]:
+        """Варианты ключа id (int/str), чтобы lookup после preload не промахивался."""
+        out: List[Union[int, str]] = [obj_id]
+        if isinstance(obj_id, str) and obj_id.isdigit():
+            out.append(int(obj_id))
+        elif isinstance(obj_id, int):
+            out.append(str(obj_id))
+        return out
+
+    def get_object(self, obj_type: str, obj_id: Union[int, str]) -> Optional[Any]:
+        """Сначала _objects, затем bulk _all_objects (после preload)."""
+        for oid in self._id_variants(obj_id):
+            obj = self._objects.get((obj_type, oid))
+            if obj is not None:
+                return obj
+            if obj_type in DEVICE_TYPES:
+                obj = self._objects.get(("device", oid))
+                if obj is not None:
+                    return obj
+
+        # bulk-кэш от get_all_* / preload
+        bulk_keys = [obj_type]
+        if obj_type in DEVICE_TYPES:
+            bulk_keys.extend(["device", TYPE_OLT, TYPE_SWITCH])
+        if obj_type == "device":
+            bulk_keys.extend([TYPE_OLT, TYPE_SWITCH])
+
+        for bkey in bulk_keys:
+            bulk = self._all_objects.get(bkey)
+            if not bulk:
+                continue
+            for oid in self._id_variants(obj_id):
+                if oid in bulk:
+                    obj = bulk[oid]
+                    # промоутим в _objects для быстрых следующих lookup
+                    self.set_object(obj_type, obj_id, obj)
+                    return obj
+        return None
+
+    def set_object(self, obj_type: str, obj_id: Union[int, str], obj: Any) -> None:
+        with self._lock:
+            for oid in self._id_variants(obj_id):
+                self._objects[(obj_type, oid)] = obj
+                if obj_type in DEVICE_TYPES:
+                    self._objects[("device", oid)] = obj
+
+    def get_or_load_object(
+        self,
+        obj_type: str,
+        obj_id: Union[int, str],
+        loader: Callable[[], Any],
+    ) -> Any:
+        obj = self.get_object(obj_type, obj_id)
+        if obj is not None:
+            return obj
+
+        # если идёт фоновый preload этого типа — дождаться, не бить API по одному
+        loading = _loading_types()
+        fut = self._preload_future_for(obj_type)
+        if (
+            fut is not None
+            and not fut.done()
+            and obj_type not in loading
+            and "device" not in loading
+        ):
+            try:
+                fut.result()
+            except Exception:
+                pass
+            obj = self.get_object(obj_type, obj_id)
+            if obj is not None:
+                return obj
+
+        obj = loader()
+        if obj is not None:
+            self.set_object(obj_type, obj_id, obj)
+        return obj
+
+    def get_commutations(
+        self, obj_type: str, obj_id: Union[int, str]
+    ) -> Optional[List[Any]]:
+        return self._commutations.get((obj_type, obj_id))
+
+    def set_commutations(
+        self, obj_type: str, obj_id: Union[int, str], comms: List[Any]
+    ) -> None:
+        with self._lock:
+            self._commutations[(obj_type, obj_id)] = comms
+
+    def get_or_load_commutations(
+        self,
+        obj_type: str,
+        obj_id: Union[int, str],
+        loader: Callable[[], List[Any]],
+    ) -> List[Any]:
+        key = (obj_type, obj_id)
+        comms = self._commutations.get(key)
+        if comms is None:
+            comms = loader()
+            if comms is not None:
+                self.set_commutations(obj_type, obj_id, comms)
+            else:
+                comms = []
+        return comms
+
+    def _preload_future_for(self, object_type: str):
+        """Future фоновой загрузки для object_type (с учётом job-ключей device)."""
+        fut = self._preload_futures.get(object_type)
+        if fut is not None:
+            return fut
+        # job "device" грузит olt+switch
+        if object_type in (TYPE_OLT, TYPE_SWITCH, "device"):
+            return self._preload_futures.get("device")
+        return None
+
+    def get_all_objects(
+        self, object_type: str, loader: Callable[[], Any]
+    ) -> Dict[Union[int, str], Any]:
+        with self._lock:
+            if object_type in self._all_objects:
+                return self._all_objects[object_type]
+
+        loading = _loading_types()
+        # дождаться фоновой загрузки, но не ждать самих себя (иначе deadlock)
+        fut = self._preload_future_for(object_type)
+        if (
+            fut is not None
+            and not fut.done()
+            and object_type not in loading
+            and "device" not in loading  # device job covers olt/switch
+        ):
+            try:
+                fut.result()
+            except Exception:
+                pass
+            with self._lock:
+                if object_type in self._all_objects:
+                    return self._all_objects[object_type]
+
+        loading.add(object_type)
+        try:
+            return self._fetch_all_objects(object_type, loader)
+        finally:
+            loading.discard(object_type)
+
+    def _fetch_all_objects(
+        self, object_type: str, loader: Callable[[], Any]
+    ) -> Dict[Union[int, str], Any]:
+        """Фактическая загрузка без ожидания Future (для preload и get_all_objects)."""
+        with self._lock:
+            if object_type in self._all_objects:
+                return self._all_objects[object_type]
+
+        logger = _get_logger()
+        timeout = self._bulk_timeout(object_type)
+        try:
+            with _temporary_timeout(timeout):
+                result = loader()
+            objects = result.to_list() if result else []
+        except Exception as e:
+            logger.error(f"Ошибка загрузки всех объектов типа {object_type}: {e}")
+            objects = []
+
+        obj_dict: Dict[Union[int, str], Any] = {}
+        for obj in objects:
+            obj_id = (
+                getattr(obj, "id", None)
+                or getattr(obj, "code", None)
+                or getattr(obj, "uuid", None)
+            )
+            if obj_id is not None:
+                obj_dict[obj_id] = obj
+                self.set_object(object_type, obj_id, obj)
+
+        with self._lock:
+            # merge if parallel fiber loads etc.
+            existing = self._all_objects.get(object_type)
+            if existing:
+                existing.update(obj_dict)
+                obj_dict = existing
+            else:
+                self._all_objects[object_type] = obj_dict
+        logger.info(
+            "DataCache: загружено %s объектов типа %s (timeout=%ss)",
+            len(obj_dict), object_type, timeout,
+        )
+        return obj_dict
+
+    # ------------------------------------------------------------------
+    # фоновая предзагрузка
+    # ------------------------------------------------------------------
+
+    def preload_async(
+        self,
+        client: WorkerNetClient,
+        *,
+        types: Optional[Sequence[str]] = None,
+        include_customers: Optional[bool] = None,
+        workers: Optional[int] = None,
+    ) -> Dict[str, Future]:
+        """Запустить get_all_* в фоне (по одному потоку на тип).
+
+        Основной поток не блокируется. Повторный вызов get_all_* /
+        get_all_customers дождётся соответствующего Future.
+
+        types: список ключей — node, device, splitter, cross, cwdm, fiber, customer
+        """
+        try:
+            from ...core.config import config_manager
+            default_types = list(config_manager.preload_types)
+            default_customers = bool(config_manager.preload_customers)
+            default_workers = int(config_manager.preload_workers)
+        except Exception:
+            default_types = [
+                "node", "device", "splitter", "cross", "cwdm", "fiber",
+            ]
+            default_customers = False
+            default_workers = 6
+
+        if types is None:
+            types = default_types
+        if include_customers is None:
+            include_customers = default_customers
+        if include_customers and "customer" not in types:
+            types = list(types) + ["customer"]
+
+        n_workers = workers if workers is not None else default_workers
+        n_workers = max(1, min(int(n_workers), max(1, len(list(types)))))
+
+        jobs: Dict[str, Callable[[], Any]] = {
+            "node": lambda: self.get_all_nodes(client),
+            "device": lambda: self.get_all_devices(client),
+            "splitter": lambda: self.get_all_splitters(client),
+            "cross": lambda: self.get_all_crosses(client),
+            "cwdm": lambda: self.get_all_cwdms(client),
+            "fiber": lambda: self.get_all_fibers(client),
+            "customer": lambda: self.get_all_customers(client),
+        }
+        # ключи, под которыми get_all_objects хранит данные
+        cache_keys = {
+            "node": ["node"],
+            "device": [TYPE_OLT, TYPE_SWITCH, "device"],
+            "splitter": [TYPE_SPLITTER],
+            "cross": [TYPE_CROSS],
+            "cwdm": [TYPE_CWDM],
+            "fiber": [TYPE_FIBER],
+            "customer": [TYPE_CUSTOMER],
+        }
+
+        if self._preload_executor is None:
+            self._preload_executor = ThreadPoolExecutor(
+                max_workers=n_workers, thread_name_prefix="DataCachePreload",
+            )
+
+        logger = _get_logger()
+        started = {}
+        for t in types:
+            key = str(t).lower()
+            if key not in jobs:
+                logger.warning("DataCache.preload: неизвестный тип %s", t)
+                continue
+            # уже в кэше?
+            keys = cache_keys.get(key, [key])
+            if any(k in self._all_objects for k in keys):
+                continue
+            if key in self._preload_futures and not self._preload_futures[key].done():
+                started[key] = self._preload_futures[key]
+                continue
+
+            def _run(k=key, fn=jobs[key], mark_keys=keys):
+                loading = _loading_types()
+                for mk in mark_keys:
+                    loading.add(mk)
+                loading.add(k)
+                try:
+                    return fn()
+                except Exception as e:
+                    _get_logger().error("preload %s failed: %s", k, e)
+                    return {}
+                finally:
+                    for mk in mark_keys:
+                        loading.discard(mk)
+                    loading.discard(k)
+
+            fut = self._preload_executor.submit(_run)
+            self._preload_futures[key] = fut
+            for mk in keys:
+                self._preload_futures.setdefault(mk, fut)
+            started[key] = fut
+            logger.info("DataCache: фоновая загрузка %s…", key)
+
+        return started
+
+    def wait_preload(self, timeout: Optional[float] = None) -> None:
+        """Дождаться завершения всех фоновых загрузок."""
+        for key, fut in list(self._preload_futures.items()):
+            try:
+                fut.result(timeout=timeout)
+            except Exception as e:
+                _get_logger().warning("preload %s: %s", key, e)
+
+    def preload_status(self) -> Dict[str, str]:
+        """Статус фоновых задач: pending / done / error."""
+        out = {}
+        for key, fut in self._preload_futures.items():
+            if not fut.done():
+                out[key] = "pending"
+            elif fut.exception() is not None:
+                out[key] = f"error:{fut.exception()}"
+            else:
+                out[key] = "done"
+        for key in self._all_objects:
+            out.setdefault(key, "done")
+        return out
+
+    # ------------------------------------------------------------------
+    # inventory / lengths / catalog
+    # ------------------------------------------------------------------
+
+    def get_inventory(
+        self, client: WorkerNetClient, inventory_id: Union[int, str]
+    ) -> Optional[Any]:
+        if inventory_id in self._inventory:
+            return self._inventory[inventory_id]
+
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Inventory.get_inventory(id=int(inventory_id))
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(
+                    f"Не удалось загрузить inventory {inventory_id}: {e}"
+                )
+                return None
+
+        inv = loader()
+        if inv is not None:
+            self._inventory[inventory_id] = inv
+        return inv
+
+    def get_inventory_catalog_item(
+        self, client: WorkerNetClient, catalog_id: Union[int, str]
+    ) -> Optional[Any]:
+        if catalog_id in self._inventory_catalog:
+            return self._inventory_catalog[catalog_id]
+
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Inventory.get_inventory_catalog(id=int(catalog_id))
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(
+                    f"Не удалось загрузить inventory catalog {catalog_id}: {e}"
+                )
+                return None
+
+        item = loader()
+        if item is not None:
+            self._inventory_catalog[catalog_id] = item
+        return item
+
+    def preload_splitter_inventory(self, client: WorkerNetClient) -> None:
+        """Подтянуть inventory для всех известных сплиттеров."""
+        splitters = self.get_all_splitters(client)
+        for sp in splitters.values():
+            inv_id = getattr(sp, "inventory_id", None)
+            if inv_id is not None:
+                inv = self.get_inventory(client, inv_id)
+                if inv is not None:
+                    cid = getattr(inv, "catalog_id", None)
+                    if cid is not None:
+                        self.get_inventory_catalog_item(client, cid)
+
+    def get_fiber_length_m(
+        self, fiber_id: Union[int, str]
+    ) -> Optional[Tuple[Optional[float], str]]:
+        return self._fiber_lengths.get(fiber_id)
+
+    def set_fiber_length_m(
+        self,
+        fiber_id: Union[int, str],
+        length_m: Optional[float],
+        source: str,
+    ) -> None:
+        self._fiber_lengths[fiber_id] = (length_m, source)
+
+    def get_geo_length(
+        self, client: WorkerNetClient, fiber_id: int
+    ) -> Optional[float]:
+        if fiber_id in self._geo_lengths:
+            return self._geo_lengths[fiber_id]
+        try:
+            result = client.Fiber.get_geo_length(id=fiber_id)
+            value: Optional[float] = None
+            if result is None:
+                value = None
+            elif isinstance(result, (int, float)):
+                value = float(result)
+            elif hasattr(result, "__iter__") and not isinstance(result, (str, bytes)):
+                try:
+                    value = float(result[0])  # type: ignore[index]
+                except Exception:
+                    value = None
+            else:
+                try:
+                    value = float(result)  # type: ignore[arg-type]
+                except Exception:
+                    value = None
+            self._geo_lengths[fiber_id] = value
+            return value
+        except Exception as e:
+            _get_logger().debug(f"get_geo_length({fiber_id}) failed: {e}")
+            self._geo_lengths[fiber_id] = None
+            return None
+
+    def get_cable_catalog(self, client: WorkerNetClient) -> List[Any]:
+        if self._cable_catalog is not None:
+            return self._cable_catalog
+        try:
+            result = client.Fiber.catalog_cables_get()
+            self._cable_catalog = result.to_list() if result else []
+        except Exception as e:
+            _get_logger().warning(f"catalog_cables_get failed: {e}")
+            self._cable_catalog = []
+        return self._cable_catalog
+
+    def get_all_splitters(self, client: WorkerNetClient) -> Dict[int, Any]:
+        return self.get_all_objects(TYPE_SPLITTER, lambda: client.Splitter.get())
+
+    def get_all_crosses(self, client: WorkerNetClient) -> Dict[str, Any]:
+        return self.get_all_objects(TYPE_CROSS, lambda: client.Cross.get_list())
+
+    def get_all_cwdms(self, client: WorkerNetClient) -> Dict[int, Any]:
+        return self.get_all_objects(TYPE_CWDM, lambda: client.Cwdm.get())
+
+    def get_all_nodes(self, client: WorkerNetClient) -> Dict[int, Any]:
+        return self.get_all_objects("node", lambda: client.Node.get())
+
+    def get_all_fibers(self, client: WorkerNetClient) -> Dict[int, Any]:
+        """Все кабели по всем типам линий. Один проход, один ключ TYPE_FIBER."""
+        with self._lock:
+            if TYPE_FIBER in self._all_objects:
+                return self._all_objects[TYPE_FIBER]
+
+        loading = _loading_types()
+        fut = self._preload_futures.get("fiber") or self._preload_futures.get(TYPE_FIBER)
+        if fut is not None and not fut.done() and TYPE_FIBER not in loading:
+            try:
+                fut.result()
+            except Exception:
+                pass
+            with self._lock:
+                if TYPE_FIBER in self._all_objects:
+                    return self._all_objects[TYPE_FIBER]
+
+        loading.add(TYPE_FIBER)
+        try:
+            logger = _get_logger()
+            timeout = self._bulk_timeout(TYPE_FIBER)
+            result: Dict[int, Any] = {}
+            try:
+                with _temporary_timeout(timeout):
+                    catalog = client.Fiber.catalog_types_get()
+                for cab_type in catalog.to_list() if catalog else []:
+                    type_id = getattr(cab_type, "id", None)
+                    if type_id is None:
+                        continue
+                    try:
+                        with _temporary_timeout(timeout):
+                            batch = client.Fiber.get_list(cable_line_type_id=type_id)
+                        objects = batch.to_list() if batch else []
+                    except Exception as e:
+                        logger.error(
+                            "Ошибка загрузки fiber cable_line_type_id=%s: %s",
+                            type_id, e,
+                        )
+                        objects = []
+                    for obj in objects:
+                        obj_id = (
+                            getattr(obj, "id", None)
+                            or getattr(obj, "code", None)
+                            or getattr(obj, "uuid", None)
+                        )
+                        if obj_id is not None:
+                            result[obj_id] = obj
+                            self.set_object(TYPE_FIBER, obj_id, obj)
+            except Exception as e:
+                logger.error(f"Ошибка загрузки всех fiber: {e}")
+
+            with self._lock:
+                self._all_objects[TYPE_FIBER] = result
+            logger.info(
+                "DataCache: загружено %s объектов типа %s (timeout=%ss)",
+                len(result), TYPE_FIBER, timeout,
+            )
+            return result
+        finally:
+            loading.discard(TYPE_FIBER)
+
+    def get_all_devices(self, client: WorkerNetClient) -> Dict[int, Any]:
+        result: Dict[int, Any] = {}
+        for dev_type in [TYPE_OLT, TYPE_SWITCH]:
+            devices = self.get_all_objects(
+                dev_type,
+                lambda dt=dev_type: client.Device.get_data(object_type=dt),
+            )
+            result.update(devices)
+        return result
+
+    def get_all_customers(self, client: WorkerNetClient) -> Dict[int, Any]:
+        """Список абонентов — долгий запрос, таймаут customer_list_timeout."""
+        return self.get_all_objects(
+            TYPE_CUSTOMER, lambda: client.Module.get_user_list()
+        )
+
+    def get_device(
+        self, client: WorkerNetClient, obj_type: str, obj_id: int
+    ) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Device.get_data(
+                    object_type=obj_type, object_id=obj_id
+                )
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(
+                    f"Не удалось загрузить устройство {obj_type}:{obj_id}: {e}"
+                )
+                return None
+
+        return self.get_or_load_object(obj_type, obj_id, loader)
+
+    def get_cross(self, client: WorkerNetClient, obj_id: str) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Cross.get_list(id=obj_id)
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(f"Не удалось загрузить кросс {obj_id}: {e}")
+                return None
+
+        return self.get_or_load_object(TYPE_CROSS, obj_id, loader)
+
+    def get_splitter(self, client: WorkerNetClient, obj_id: int) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Splitter.get(id=obj_id)
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(
+                    f"Не удалось загрузить сплиттер {obj_id}: {e}"
+                )
+                return None
+
+        return self.get_or_load_object(TYPE_SPLITTER, obj_id, loader)
+
+    def get_fiber(self, client: WorkerNetClient, obj_id: int) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Fiber.get_list(object_id=obj_id)
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(
+                    f"Не удалось загрузить кабель {obj_id}: {e}"
+                )
+                return None
+
+        return self.get_or_load_object(TYPE_FIBER, obj_id, loader)
+
+    def get_customer(self, client: WorkerNetClient, obj_id: int) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Customer.get_data(customer_id=obj_id)
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(
+                    f"Не удалось загрузить абонента {obj_id}: {e}"
+                )
+                return None
+
+        return self.get_or_load_object(TYPE_CUSTOMER, obj_id, loader)
+
+    def get_node(self, client: WorkerNetClient, obj_id: int) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Node.get(id=obj_id)
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(f"Не удалось загрузить узел {obj_id}: {e}")
+                return None
+
+        return self.get_or_load_object("node", obj_id, loader)
+
+    def get_cwdm(self, client: WorkerNetClient, obj_id: int) -> Optional[Any]:
+        def loader() -> Optional[Any]:
+            try:
+                result = client.Cwdm.get(id=obj_id)
+                return result[0] if result and len(result) > 0 else None
+            except Exception as e:
+                _get_logger().warning(f"Не удалось загрузить CWDM {obj_id}: {e}")
+                return None
+
+        return self.get_or_load_object(TYPE_CWDM, obj_id, loader)
+
+    def get_commutations_by_object(
+        self,
+        client: WorkerNetClient,
+        obj_type: str,
+        obj_id: Union[int, str],
+        is_finish_data: int = 0,
+    ) -> List[Any]:
+        actual_type = TYPE_SWITCH if obj_type in DEVICE_TYPES else obj_type
+
+        def loader() -> List[Any]:
+            api_type = actual_type
+            api_id = str(obj_id) if api_type == TYPE_CROSS else int(obj_id)
+            try:
+                result = client.Commutation.get_data(
+                    object_type=api_type,
+                    object_id=api_id,
+                    is_finish_data=is_finish_data,
+                )
+                return result.to_list() if result else []
+            except Exception as e:
+                _get_logger().error(
+                    f"Ошибка загрузки коммутаций для {actual_type}:{obj_id}: {e}"
+                )
+                return []
+
+        return self.get_or_load_commutations(actual_type, obj_id, loader)
+
+    def to_dict(self) -> dict:
+        return {
+            "objects": self._objects,
+            "commutations": self._commutations,
+            "all_objects": self._all_objects,
+            "inventory": self._inventory,
+            "inventory_catalog": self._inventory_catalog,
+            "fiber_lengths": self._fiber_lengths,
+            "geo_lengths": self._geo_lengths,
+            "cable_catalog": self._cable_catalog,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DataCache":
+        cache = cls(preload=False)
+        cache._objects = data.get("objects", {})
+        cache._commutations = data.get("commutations", {})
+        cache._all_objects = data.get("all_objects", {})
+        cache._inventory = data.get("inventory", {})
+        cache._inventory_catalog = data.get("inventory_catalog", {})
+        cache._fiber_lengths = data.get("fiber_lengths", {})
+        cache._geo_lengths = data.get("geo_lengths", {})
+        cache._cable_catalog = data.get("cable_catalog")
+        return cache
+
+    def clear(self) -> None:
+        with self._lock:
+            self._objects.clear()
+            self._commutations.clear()
+            self._all_objects.clear()
+            self._inventory.clear()
+            self._inventory_catalog.clear()
+            self._fiber_lengths.clear()
+            self._geo_lengths.clear()
+            self._cable_catalog = None
+
+    def shutdown_preload(self) -> None:
+        """Остановить пул фоновых загрузок."""
+        if self._preload_executor is not None:
+            self._preload_executor.shutdown(wait=False, cancel_futures=True)
+            self._preload_executor = None
