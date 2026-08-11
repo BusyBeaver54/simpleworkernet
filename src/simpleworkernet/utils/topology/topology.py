@@ -54,8 +54,8 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         if cgraph is None or cgraph.vcount() == 0:
             return
         if not cgraph.is_connected():
-            # Несколько стартовых портов (port=[19,20]) часто дают 2+ компоненты —
-            # граф всё равно полезен (и нужен для FNGraph).
+            # Несколько стартовых портов (port=[19,20]) часто дают 2+ компоненты.
+            # CGraph можно хранить несвязным; FNGraph в конце обязан быть связным.
             self.logger.warning(
                 "CGraph не связный (v=%s e=%s) — добавляем как есть",
                 cgraph.vcount(), cgraph.ecount(),
@@ -63,13 +63,9 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         self.cgraphs.append(cgraph)
 
     def _set_fngraph(self, fngraph: Optional[FNGraph]) -> None:
+        """Промежуточная установка без проверки связности (финал — _finalize_build)."""
         if fngraph is None or fngraph.vcount() == 0:
             return
-        if not fngraph.is_connected():
-            self.logger.warning(
-                "FNGraph не связный (v=%s e=%s) — устанавливаем как есть",
-                fngraph.vcount(), fngraph.ecount(),
-            )
         self.fngraph = fngraph
 
     def _build_fngraph_from_cgraph(self, cgraph: CGraph) -> Optional[FNGraph]:
@@ -85,6 +81,47 @@ class NetworkTopology(NetworkTopologyBuildMixin):
             )
             return None
         return fn
+
+    def _rebuild_fngraph_from_all_cgraphs(self) -> None:
+        """Собрать один FNGraph из всех CGraph (+ уже заданный, напр. build_from_node)."""
+        prev = self.fngraph
+        self.fngraph = None
+        fns: List[FNGraph] = []
+        if prev is not None and prev.vcount() > 0:
+            fns.append(prev)
+        for cg in self.cgraphs:
+            fn = self._build_fngraph_from_cgraph(cg)
+            if fn is not None and fn.vcount() > 0:
+                fns.append(fn)
+        if not fns:
+            return
+        if len(fns) == 1:
+            self.fngraph = fns[0]
+            return
+        merged = merge_fngraphs(fns, self.client, self.cache)
+        self.fngraph = merged if merged is not None else fns[0]
+
+    def _finalize_build(self) -> "NetworkTopology":
+        """После всех CGraph: собрать FNGraph и потребовать связность."""
+        from .errors import TopologyBuildError
+
+        self._rebuild_fngraph_from_all_cgraphs()
+        if not self.cgraphs:
+            return self
+        if self.fngraph is None or self.fngraph.vcount() == 0:
+            raise TopologyBuildError(
+                "FNGraph не построен: по CGraph не удалось извлечь узлы/кабели"
+            )
+        if not self.fngraph.is_connected():
+            raise TopologyBuildError(
+                f"FNGraph не связный (v={self.fngraph.vcount()} "
+                f"e={self.fngraph.ecount()}). Ожидается один связный граф сооружений."
+            )
+        self.logger.info(
+            "FNGraph OK: v=%s e=%s (из %s CGraph)",
+            self.fngraph.vcount(), self.fngraph.ecount(), len(self.cgraphs),
+        )
+        return self
 
     def _build_cgraph(
         self, obj_type, obj_id, port=None, side=None,
@@ -114,17 +151,10 @@ class NetworkTopology(NetworkTopologyBuildMixin):
             return None
 
     def _attach(self, cgraph: Optional[CGraph]) -> None:
+        """Только добавить CGraph. FNGraph собирается в _finalize_build()."""
         if cgraph is None:
             return
         self._add_cgraph(cgraph)
-        fn = self._build_fngraph_from_cgraph(cgraph)
-        if fn is None:
-            return
-        if self.fngraph is None:
-            self._set_fngraph(fn)
-        else:
-            merged = merge_fngraphs([self.fngraph, fn], self.client, self.cache)
-            self._set_fngraph(merged if merged is not None else fn)
 
     def _find_cgraph_for_object(self, obj_key: ObjKey) -> Optional[CGraph]:
         for cg in self.cgraphs:
@@ -193,7 +223,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                 except (TypeError, ValueError):
                     en = None
             new_topo._set_fngraph(extract_linear_fngraph(self.fngraph, sn, en))
-            return new_topo
+            return new_topo._finalize_build()
         if not self.cgraphs:
             raise TopologyBuildError("Нет CGraph. Сначала build_from_*")
         if cgraph_index < 0 or cgraph_index >= len(self.cgraphs):
@@ -203,10 +233,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
             port=port, side=side,
         )
         new_topo._add_cgraph(linear_cg)
-        fn = new_topo._build_fngraph_from_cgraph(linear_cg)
-        if fn is not None:
-            new_topo._set_fngraph(fn)
-        return new_topo
+        return new_topo._finalize_build()
 
     def get_finish_by_node(self, node_id: int) -> List[Any]:
         result = []
