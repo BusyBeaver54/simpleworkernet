@@ -29,7 +29,7 @@ class NetworkTopologyBuildMixin:
             excluded_nodes=_normalize_set(excluded_nodes),
             linear=linear, linear_on_fail=linear_on_fail,
         ))
-        return self
+        return self._finalize_build()
 
     def build_from_customer(
         self, object_id: int,
@@ -43,7 +43,7 @@ class NetworkTopologyBuildMixin:
             excluded_fibers=_normalize_set(excluded_fibers),
             excluded_nodes=_normalize_set(excluded_nodes),
         ))
-        return self
+        return self._finalize_build()
 
     def build_from_cross(
         self, object_id: str, port=None, side: Optional[int] = None,
@@ -67,12 +67,12 @@ class NetworkTopologyBuildMixin:
                     TYPE_CROSS, object_id, port=p, side=None,
                     included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
                 ))
-            return self
+            return self._finalize_build()
         self._attach(self._build_cgraph(
             TYPE_CROSS, object_id, port=port, side=side,
             included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
         ))
-        return self
+        return self._finalize_build()
 
     def build_from_splitter(
         self, object_id: int, port=None, side: Optional[int] = None,
@@ -105,14 +105,14 @@ class NetworkTopologyBuildMixin:
                 else:
                     for g in graphs:
                         self._attach(g)
-            return self
+            return self._finalize_build()
         self._attach(self._build_cgraph(
             TYPE_SPLITTER, object_id, port=port, side=side,
             included_fibers=_normalize_set(included_fibers),
             excluded_fibers=_normalize_set(excluded_fibers),
             excluded_nodes=_normalize_set(excluded_nodes),
         ))
-        return self
+        return self._finalize_build()
 
     def build_from_cwdm(
         self, object_id: int, port=None, side: Optional[int] = None,
@@ -145,14 +145,14 @@ class NetworkTopologyBuildMixin:
                 else:
                     for g in graphs:
                         self._attach(g)
-            return self
+            return self._finalize_build()
         self._attach(self._build_cgraph(
             TYPE_CWDM, object_id, port=port, side=side,
             included_fibers=_normalize_set(included_fibers),
             excluded_fibers=_normalize_set(excluded_fibers),
             excluded_nodes=_normalize_set(excluded_nodes),
         ))
-        return self
+        return self._finalize_build()
 
     def build_from_fiber(
         self, object_id: int, port=None, side: Optional[int] = None,
@@ -166,7 +166,7 @@ class NetworkTopologyBuildMixin:
             excluded_fibers=_normalize_set(excluded_fibers),
             excluded_nodes=_normalize_set(excluded_nodes),
         ))
-        return self
+        return self._finalize_build()
 
     def build_from_node(
         self, object_id: int,
@@ -181,7 +181,7 @@ class NetworkTopologyBuildMixin:
         fn.build(object_id, included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n)
         if fn.vcount() == 0:
             self.logger.warning(f"Не удалось построить FNGraph от узла {object_id}")
-            return self
+            return self._finalize_build()
         self._set_fngraph(fn)
         for node_id in [v["node_id"] for v in fn.vs]:
             if exc_n is not None and node_id in exc_n:
@@ -229,7 +229,7 @@ class NetworkTopologyBuildMixin:
                             self._add_cgraph(cg)
                 except Exception as e:
                     self.logger.warning(f"Ошибка построения от {obj_type}:{obj_id}: {e}")
-        return self
+        return self._finalize_build()
 
     def build_from_cable(
         self, object_id: int,
@@ -241,10 +241,10 @@ class NetworkTopologyBuildMixin:
         exc_f = _normalize_set(excluded_fibers)
         if inc is not None and object_id not in inc:
             self.logger.warning(f"Кабель {object_id} не в included_fibers")
-            return self
+            return self._finalize_build()
         if exc_f is not None and object_id in exc_f:
             self.logger.warning(f"Кабель {object_id} в excluded_fibers")
-            return self
+            return self._finalize_build()
         fiber_ports = set()
         for rec in self._get_commutations(TYPE_FIBER, object_id):
             if getattr(rec, "clps_last", None) == "finish":
@@ -258,4 +258,4 @@ class NetworkTopologyBuildMixin:
                 included_fibers=inc, excluded_fibers=exc_f,
                 excluded_nodes=_normalize_set(excluded_nodes),
             ))
-        return self
+        return self._finalize_build()
