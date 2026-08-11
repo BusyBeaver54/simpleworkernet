@@ -1,3 +1,5 @@
+![SimpleWorkerNet](src/assets/social_preview.jpg)
+
 # **SimpleWorkerNet**
 
 Python-клиент для REST API [WorkerNet](https://workernet.ru) с типизацией ответов, SmartData и графовой топологией сети.
