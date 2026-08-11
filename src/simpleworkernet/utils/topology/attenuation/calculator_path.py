@@ -286,8 +286,11 @@ class AttenuationPathMixin:
         if direction is None:
             direction = self._direction_of_path(vpath)
         segs: List[AttenuationSegment] = []
+        endpoints = {vpath[0], vpath[-1]} if len(vpath) >= 1 else set()
         for a, b in zip(vpath, vpath[1:]):
-            segs.extend(self._edge_segments(a, b, direction=direction))
+            segs.extend(self._edge_segments(
+                a, b, direction=direction, path_endpoints=endpoints,
+            ))
         total = sum(s.db for s in segs)
         total_min = sum((s.db_min if s.db_min is not None else s.db) for s in segs)
         total_max = sum((s.db_max if s.db_max is not None else s.db) for s in segs)
