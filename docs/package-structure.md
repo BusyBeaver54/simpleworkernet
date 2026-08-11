@@ -2,66 +2,21 @@
 
 ```text
 src/simpleworkernet/
-├── __init__.py                 # публичный API, предзагрузка кэша моделей
-├── __main__.py                 # python -m simpleworkernet
-├── __version__.py
-├── cli.py                      # точка входа cleanup-simpleworkernet
-├── py.typed
-│
-├── core/
-│   ├── client.py               # WorkerNetClient (сессии, GET/POST, ретраи)
-│   ├── config.py               # ConfigManager + пути XDG/AppData
-│   ├── cache.py                # SmartDataCache (LFU/LRU/FIFO)
-│   ├── logger.py               # фасад над stdlib logging
-│   ├── constants.py            # уровни DEBUG/INFO/WARNING/ERROR/CRITICAL
-│   ├── exceptions.py
-│   └── typing.py
-│
-├── models/
-│   ├── base.py                 # BaseModel, BaseCategory, smart_model, CollapsedField
-│   ├── primitives.py           # GeoPoint, vStr, vMoney, vINN, …
-│   ├── operators.py            # Operator, Where
-│   └── categories/             # API-категории (Node, Customer, Fiber, …)
-│       ├── __init__.py
-│       ├── additional_data.py, address.py, advertising.py, attach.py
-│       ├── billing.py, cable_route.py, call.py, commutation.py
-│       ├── cross.py, customer.py, cwdm.py, device.py, employee.py
-│       ├── fiber.py, gps.py, inventory.py, key.py, map.py, module.py
-│       ├── node.py, notepad.py, owner.py, service.py, setting.py
-│       ├── sms.py, splitter.py, system.py, tariff.py, task.py
-│       ├── trader.py, vehicle.py, vlan.py
-│
-├── smartdata/
-│   ├── core.py                 # SmartData, коллекции
-│   ├── helpers.py
-│   ├── metadata.py             # метаданные пути ответа API
-│   └── processor.py            # кастинг JSON → модели
-│
+├── __init__.py
+├── __main__.py / cli.py
+├── core/                   # client, config, cache, logger, exceptions
+├── models/                 # BaseModel, categories, primitives, operators
+├── smartdata/              # SmartData processor
 ├── scripts/
-│   └── uninstall.py            # очистка данных пользователя
-│
 └── utils/
-    ├── app_name.py
-    ├── constants.py            # TYPE_*, TERMINAL_TYPES, ALL_OBJECT_TYPES
-    ├── decorators.py
-    ├── graphics.py             # SVG → PNG
-    └── topology/               # графовая топология + затухания
-        ├── __init__.py         # NetworkTopology, CGraph, FNGraph, Attenuation, …
-        ├── constants.py        # типы объектов топологии
-        ├── keys.py             # ObjKey, Interface
-        ├── models.py           # CGraphVertex/Edge, FNGraphVertex/Edge
-        ├── errors.py           # TopologyBuildError
-        ├── cache.py            # DataCache
-        ├── context.py
-        ├── ports_spec.py       # разбор port= int|str|list|tuple
-        ├── linear.py
-        ├── linear_extract.py   # вырезание линейного подграфа
-        ├── merge.py            # merge_cgraphs, merge_fngraphs
-        ├── paths.py            # simple_paths / shortest path
-        ├── topology.py         # NetworkTopology
-        ├── topology_build_methods.py   # build_from_* mixin
-        ├── topology_build_params.py
-        ├── topology_get_linear.py
+    ├── decorators.py, app_name.py, constants.py, graphics.py
+    └── topology/
+        ├── __init__.py             # публичный API
+        ├── topology.py             # NetworkTopology
+        ├── topology_build_methods.py / topology_build_params.py
+        ├── cache.py                # DataCache
+        ├── constants.py, keys.py, models.py, errors.py, context.py
+        ├── ports_spec.py, paths.py, linear.py, linear_extract.py, merge.py
         ├── builders/
         │   ├── base.py, handlers.py, handlers_splitter.py, handlers_util.py
         ├── graphs/
@@ -99,8 +54,6 @@ src/simpleworkernet/
 | `simpleworkernet.utils.topology` | `NetworkTopology`, `CGraph`, `FNGraph`, `DataCache`, `Attenuation`, `PathReport`, `MultiPathReport`, типы |
 | `simpleworkernet.utils.topology.attenuation` | полный API затуханий: каталог, шаблоны, отчёты, `PairPlan`, `EndpointInfo` |
 | `simpleworkernet.utils.constants` | `TYPE_*`, `TERMINAL_TYPES`, `ALL_OBJECT_TYPES` |
-
-Устаревшее имя **`Topology`** удалено — используйте **`NetworkTopology`**.
 
 ```python
 from simpleworkernet.utils.topology import (
