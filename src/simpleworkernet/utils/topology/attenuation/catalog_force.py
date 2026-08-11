@@ -26,7 +26,8 @@ class CatalogForceMixin:
             picked = _pick_wl(raw, wavelength_nm, context=f"force fiber:{fiber_id}")
             if picked is None:
                 return None
-            return picked[1] if use_max else picked[0]
+            # _pick_wl → (db_min, db_calc, db_max, used_wl)
+            return picked[2] if use_max else picked[1]
         return None
 
     def force_object(self, obj_type, obj_id, db):
