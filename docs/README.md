@@ -8,7 +8,7 @@
 | [Клиент и SmartData](client-and-smartdata.md) | WorkerNetClient, фильтры, модели |
 | [Логирование](logging.md) | stdlib logging |
 | [Кэш и каталоги данных](cache-and-data.md) | SmartDataCache, XDG/AppData пути |
-| [Координаты](coordinates.md) | GeoPoint, проекции, legacy AUTOCAD |
+| [Координаты](coordinates.md) | GeoPoint, проекции, режим AUTOCAD |
 | [Топология](topology.md) | NetworkTopology, CGraph, FNGraph, port, get_linear |
 | [Затухания](attenuation.md) | Attenuation, каталог JSON, PathReport, MultiPathReport |
 | [Графика](graphics.md) | SVG / PNG |
