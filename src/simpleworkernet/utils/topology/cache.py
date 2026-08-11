@@ -125,10 +125,15 @@ class DataCache:
         self,
         client: Optional[WorkerNetClient] = None,
         *,
-        preload: Optional[bool] = None,
         preload_types: Optional[Sequence[str]] = None,
-        preload_customers: Optional[bool] = None,
     ) -> None:
+        """
+        Args:
+            client: клиент API (нужен для preload).
+            preload_types: типы для фоновой предзагрузки
+                (node, device, splitter, cross, cwdm, fiber, customer).
+                Если не указан или пустой — preload не запускается.
+        """
         self._objects: Dict[Tuple[str, Union[int, str]], Any] = {}
         self._commutations: Dict[Tuple[str, Union[int, str]], List[Any]] = {}
         self._all_objects: Dict[str, Dict[Union[int, str], Any]] = {}
@@ -144,18 +149,9 @@ class DataCache:
         self._preload_futures: Dict[str, Future] = {}
         self._preload_executor: Optional[ThreadPoolExecutor] = None
 
-        try:
-            from ...core.config import config_manager
-            default_preload = bool(config_manager.preload_on_init)
-        except Exception:
-            default_preload = False
-        do_preload = preload if preload is not None else default_preload
-        if client is not None and do_preload:
-            self.preload_async(
-                client,
-                types=preload_types,
-                include_customers=preload_customers,
-            )
+        types = list(preload_types) if preload_types else []
+        if client is not None and types:
+            self.preload_async(client, types=types)
 
     # ------------------------------------------------------------------
     # timeout helpers
