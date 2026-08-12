@@ -228,7 +228,7 @@ class Attenuation(
         use_max: Optional[bool] = None,
         max_paths: Optional[int] = None,
     ):
-        """Расчёт затухания. max_paths=None — все пути/терминалы."""
+        """Расчёт затухания. Всегда MultiPathReport. max_paths=None — все пути."""
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
@@ -268,12 +268,26 @@ class Attenuation(
                     + (f" и {obj2_type}:{obj2_id}" if obj2_type else "")
                 )
             reports = [self._report_from_vpath(p, direction=direction) for p in paths]
-            if len(reports) == 1:
-                return reports[0]
             return MultiPathReport(
-                branches=reports, wavelength_nm=self.wavelength,
+                branches=reports,
+                wavelength_nm=self.wavelength,
                 from_label=reports[0].from_label if reports else "",
-                to_label=reports[0].to_label if reports else "",
+                to_label=reports[-1].to_label if reports else "",
+                query={
+                    "mode": "between_objects",
+                    "obj1_type": obj1_type,
+                    "obj1_id": obj1_id,
+                    "obj1_side": obj1_side,
+                    "obj1_port": obj1_port,
+                    "obj2_type": obj2_type,
+                    "obj2_id": obj2_id,
+                    "obj2_side": obj2_side,
+                    "obj2_port": obj2_port,
+                    "direction": direction,
+                    "wavelength_nm": self.wavelength,
+                    "use_max": self.use_max,
+                    "max_paths": max_paths,
+                },
             )
         finally:
             self.wavelength, self.use_max = prev_wl, prev_max
@@ -313,11 +327,20 @@ class Attenuation(
             raise AttenuationError(
                 f"не удалось посчитать ни один CGraph из {len(graphs)}: {detail}"
             )
-        if len(branches) == 1:
-            return branches[0]
         return MultiPathReport(
-            branches=branches, wavelength_nm=self.wavelength,
-            from_label="", to_label="", warnings=errors,
+            branches=branches,
+            wavelength_nm=self.wavelength,
+            from_label="",
+            to_label="",
+            warnings=errors,
+            query={
+                "mode": "all_graphs",
+                "cgraph_count": len(graphs),
+                "direction": direction,
+                "wavelength_nm": self.wavelength,
+                "use_max": self.use_max,
+                "max_paths": max_paths,
+            },
         )
 
     def _calculate_full_cgraph(
@@ -385,12 +408,19 @@ class Attenuation(
 
         collected = self._dedupe_paths_by_endpoints(collected)
         reports = [self._report_from_vpath(p, direction=direction) for p in collected]
-        if len(reports) == 1:
-            return reports[0]
         return MultiPathReport(
-            branches=reports, wavelength_nm=self.wavelength,
+            branches=reports,
+            wavelength_nm=self.wavelength,
             from_label=reports[0].from_label if reports else "",
             to_label=reports[-1].to_label if reports else "",
+            query={
+                "mode": "full_cgraph",
+                "direction": direction,
+                "wavelength_nm": self.wavelength,
+                "use_max": self.use_max,
+                "max_paths": max_paths,
+                "path_count": len(reports),
+            },
         )
 
     def _dedupe_paths_by_endpoints(self, paths: List[List[int]]) -> List[List[int]]:
