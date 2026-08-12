@@ -591,11 +591,50 @@ class AttenuationPathMixin:
             s.db_cumulative_max = cum_max
             s.fiber_length_cumulative_m = flen
 
+    def _orient_vpath_for_cumulative(
+        self, vpath: List[int], direction: str,
+    ) -> List[int]:
+        """Ориентировать путь так, чтобы Σ считалась от «корня».
+
+        * upstream   — от OLT/device к абоненту
+        * downstream — от абонента к OLT/device
+        * unknown    — как нашли (от first object поиска)
+        """
+        if not vpath or len(vpath) < 2 or self.g is None:
+            return list(vpath)
+        d = (direction or "unknown").strip().lower()
+        if d not in ("upstream", "downstream"):
+            return list(vpath)
+
+        device_types = {TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO}
+        try:
+            t0 = self.g.vs[vpath[0]]["obj_type"]
+            t1 = self.g.vs[vpath[-1]]["obj_type"]
+        except Exception:
+            return list(vpath)
+
+        start_dev = t0 in device_types
+        end_dev = t1 in device_types
+        start_cust = t0 == TYPE_CUSTOMER
+        end_cust = t1 == TYPE_CUSTOMER
+
+        if d == "upstream":
+            # корень = device → customer
+            if start_cust and end_dev:
+                return list(reversed(vpath))
+            return list(vpath)
+        # downstream: корень = customer → device
+        if start_dev and end_cust:
+            return list(reversed(vpath))
+        return list(vpath)
+
     def _report_from_vpath(
         self, vpath: List[int], *, direction: Optional[str] = None,
     ) -> PathReport:
         if direction is None:
             direction = self._direction_of_path(vpath)
+        # Ориентация для накопительных Σ (длина/затухание от корня).
+        vpath = self._orient_vpath_for_cumulative(vpath, direction or "unknown")
         segs: List[AttenuationSegment] = []
         endpoints = {vpath[0], vpath[-1]} if len(vpath) >= 1 else set()
         cross_adapter_seen: set = set()
