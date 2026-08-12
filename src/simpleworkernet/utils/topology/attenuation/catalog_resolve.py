@@ -141,7 +141,7 @@ class CatalogResolveMixin:
             if not ports:
                 rk = inst.get("ratio") or ratio_key
                 if not rk and inst.get("name"):
-                    rk = guess_ratio_key(str(inst["name"])
+                    rk = guess_ratio_key(str(inst["name"]))
                 if not rk and catalog_name:
                     rk = guess_ratio_key(str(catalog_name))
                 if rk:
