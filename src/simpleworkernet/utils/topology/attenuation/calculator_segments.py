@@ -62,7 +62,7 @@ def _obj_display_name(vattrs: dict) -> Optional[str]:
         obj,
         "name", "title", "label", "caption",
         "fio", "full_name", "customer_name", "device_name",
-        "username", "login",  # fallback для customer из get_user_list
+        "username", "login",
     )
     if name is not None:
         s = str(name).strip()
@@ -120,7 +120,6 @@ def _cable_name(vattrs: dict) -> Optional[str]:
         n = _attr(ct, "name", "title", "mark", "model", "brand", "code")
         if n not in (None, "") and str(n) != oid and not str(n).isdigit():
             return str(n)
-    # Fiber.Get_list: cablecode часто числовой id типа — не имя
     for key in ("mark", "name", "title", "model", "brand"):
         v = _attr(obj, key)
         if v in (None, ""):
@@ -168,10 +167,10 @@ class AttenuationSegmentsMixin:
                 return {}
 
     def _ensure_api_obj(self, vattrs: dict) -> dict:
-        """Подтянуть api_obj из cache/client, если в вершине его нет.
+        """api_obj только из вершины графа / in-memory cache — без сетевых API.
 
-        Customer при построении CGraph намеренно не грузится (скорость BFS).
-        Для отчёта затуханий имя/host всё же нужны — подгружаем лениво.
+        Абоненты (customer) при BFS не подгружаются; в calculate() не
+        дёргаем Customer API — берём только то, что уже есть в CGraph/FNGraph.
         """
         if not vattrs:
             return vattrs
@@ -181,28 +180,15 @@ class AttenuationSegmentsMixin:
         oid = vattrs.get("obj_id")
         if not ot or oid is None or oid == "":
             return vattrs
+        # customer: только данные вершины, без API
+        if ot == TYPE_CUSTOMER:
+            return vattrs
         cache = getattr(self, "cache", None)
-        client = getattr(self, "client", None)
         obj = None
-        # 1) уже в кэше (preload / предыдущие запросы)
+        # только in-memory объект кэша (без client → без HTTP)
         if cache is not None:
             try:
                 obj = cache.get_object(ot, oid)
-            except Exception:
-                obj = None
-        # 2) точечная загрузка через cache helpers
-        if obj is None and cache is not None and client is not None:
-            try:
-                if ot == TYPE_CUSTOMER and hasattr(cache, "get_customer"):
-                    obj = cache.get_customer(client, int(oid))
-                elif ot == TYPE_FIBER and hasattr(cache, "get_fiber"):
-                    obj = cache.get_fiber(client, int(oid))
-                elif ot == TYPE_SPLITTER and hasattr(cache, "get_splitter"):
-                    obj = cache.get_splitter(client, int(oid))
-                elif ot in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO) and hasattr(cache, "get_device"):
-                    obj = cache.get_device(client, ot, int(oid))
-                elif ot == TYPE_CROSS and hasattr(cache, "get_cross"):
-                    obj = cache.get_cross(client, str(oid))
             except Exception:
                 obj = None
         if obj is not None:
@@ -277,91 +263,18 @@ class AttenuationSegmentsMixin:
         return resolve_fiber_length_m(fiber_obj, slack_k=slack)
 
     def _splitter_catalog_id(self, splitter_obj: Any) -> Optional[int]:
+        """catalog_id только из объекта вершины — без inventory API."""
         if splitter_obj is None:
             return None
-        inv_id = getattr(splitter_obj, "inventory_id", None)
-        if inv_id is None and isinstance(splitter_obj, dict):
-            inv_id = splitter_obj.get("inventory_id")
-        if inv_id is None or self.cache is None or self.client is None:
-            cid = getattr(splitter_obj, "catalog_id", None)
-            if cid is None and isinstance(splitter_obj, dict):
-                cid = splitter_obj.get("catalog_id")
-            return cid
-        inv = None
-        for name in ("get_inventory_item", "get_inventory"):
-            fn = getattr(self.cache, name, None)
-            if callable(fn):
-                try:
-                    inv = fn(self.client, int(inv_id))
-                    break
-                except Exception:
-                    pass
-        if inv is None:
-            cid = getattr(splitter_obj, "catalog_id", None)
-            if cid is None and isinstance(splitter_obj, dict):
-                cid = splitter_obj.get("catalog_id")
-            return cid
-        return getattr(inv, "catalog_id", None) if not isinstance(inv, dict) else inv.get("catalog_id")
+        cid = getattr(splitter_obj, "catalog_id", None)
+        if cid is None and isinstance(splitter_obj, dict):
+            cid = splitter_obj.get("catalog_id")
+        return cid
 
     def _resolve_cable_name(self, fiber_vertex_attrs: dict) -> Optional[str]:
         fiber_vertex_attrs = self._ensure_api_obj(fiber_vertex_attrs)
-        name = _cable_name(fiber_vertex_attrs)
-        if name:
-            return name
-        fid = fiber_vertex_attrs.get("obj_id")
-        if fid is None or self.client is None:
-            return None
-        fiber = fiber_vertex_attrs.get("api_obj")
-        if fiber is None and hasattr(self, "_load_fiber"):
-            try:
-                fiber = self._load_fiber(int(fid))
-            except Exception:
-                fiber = None
-        if fiber is None and self.cache is not None:
-            try:
-                fiber = self.cache.get_fiber(self.client, int(fid))
-            except Exception:
-                fiber = None
-        # попытка через каталог кабелей по cablecode / cabletype_id
-        if fiber is not None:
-            name = _cable_name({"api_obj": fiber, "obj_id": fid})
-            if name:
-                return name
-            try:
-                cat = self.cache.get_cable_catalog(self.client) if self.cache else []
-            except Exception:
-                cat = []
-            code = _attr(fiber, "cablecode", "cable_code", "cabletype_id", "cable_type_id")
-            if code is not None and cat:
-                for item in cat:
-                    iid = _attr(item, "id", "code")
-                    if iid is not None and str(iid) == str(code):
-                        n = _attr(item, "name", "model", "brand", "title")
-                        if n and not str(n).isdigit():
-                            return str(n)
-        return _cable_name({"api_obj": fiber, "obj_id": fid}) if fiber is not None else None
+        return _cable_name(fiber_vertex_attrs)
 
     def _resolve_splitter_name(self, splitter_vertex_attrs: dict) -> Optional[str]:
         splitter_vertex_attrs = self._ensure_api_obj(splitter_vertex_attrs)
-        name = _obj_display_name(splitter_vertex_attrs)
-        if name:
-            return name
-        obj = splitter_vertex_attrs.get("api_obj")
-        if obj is None:
-            return None
-        inv_id = _attr(obj, "inventory_id")
-        if inv_id is not None and self.cache is not None and self.client is not None:
-            inv = None
-            for mname in ("get_inventory_item", "get_inventory"):
-                fn = getattr(self.cache, mname, None)
-                if callable(fn):
-                    try:
-                        inv = fn(self.client, int(inv_id))
-                        break
-                    except Exception:
-                        pass
-            if inv is not None:
-                n = _attr(inv, "name", "title", "label", "mark")
-                if n and not _looks_like_iface_label(n):
-                    return str(n)
-        return None
+        return _obj_display_name(splitter_vertex_attrs)
