@@ -7,6 +7,7 @@ from ...constants import (
     DEVICE_TYPES, SIDE_TYPES, TERMINAL_TYPES, ALL_OBJECT_TYPES,
 )
 from .catalog import AttenuationCatalog, guess_ratio_key
+from .models import DATA_VERSION  # noqa: F401
 from .models import AttenuationSegment, EndpointInfo, PathReport
 from .multipath import MultiPathReport
 from .calculator import Attenuation, AttenuationError
@@ -23,6 +24,7 @@ __all__ = [
     "TYPE_CUSTOMER", "TYPE_FIBER", "TYPE_SPLITTER", "TYPE_CROSS", "TYPE_CWDM",
     "TYPE_SWITCH", "TYPE_OLT", "TYPE_ONU", "TYPE_RADIO",
     "DEVICE_TYPES", "SIDE_TYPES", "TERMINAL_TYPES", "ALL_OBJECT_TYPES",
+    "DATA_VERSION",
     "Attenuation", "AttenuationError", "AttenuationCatalog",
     "AttenuationSegment", "EndpointInfo", "PathReport", "MultiPathReport",
     "PairPlan", "pair_plan", "validate_pair_inputs", "guess_ratio_key",
