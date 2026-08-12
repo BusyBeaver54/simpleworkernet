@@ -16,6 +16,7 @@ class EndpointInfo:
     obj_type: str = ""
     obj_id: str = ""
     obj_name: Optional[str] = None
+    node_id: Optional[int] = None
     side: Optional[int] = None
     port: Optional[int] = None
     port_name: Optional[str] = None
@@ -31,6 +32,7 @@ class EndpointInfo:
             "obj_type": self.obj_type,
             "obj_id": self.obj_id,
             "obj_name": self.obj_name,
+            "node_id": self.node_id,
             "side": self.side,
             "port": self.port,
             "port_name": self.port_name,
@@ -51,6 +53,7 @@ class EndpointInfo:
             obj_type=str(d.get("obj_type") or ""),
             obj_id=str(d.get("obj_id") or ""),
             obj_name=str(d["obj_name"]) if d.get("obj_name") is not None else None,
+            node_id=int(d["node_id"]) if d.get("node_id") is not None else None,
             side=int(d["side"]) if d.get("side") is not None else None,
             port=int(d["port"]) if d.get("port") is not None else None,
             port_name=str(d["port_name"]) if d.get("port_name") is not None else None,
@@ -68,6 +71,8 @@ class EndpointInfo:
 
     def format_header(self) -> str:
         parts = [f"{self.obj_type}:{self.obj_id}", self.format_sp()]
+        if self.node_id is not None:
+            parts.append(f"node={self.node_id}")
         if self.host:
             parts.append(f"host={self.host}")
         if self.obj_name:
@@ -92,6 +97,7 @@ class AttenuationSegment:
     obj_type: Optional[str] = None
     obj_id: Optional[str] = None
     obj_name: Optional[str] = None
+    node_id: Optional[int] = None
     port: Optional[int] = None
     port_name: Optional[str] = None
     side: Optional[int] = None
@@ -101,10 +107,6 @@ class AttenuationSegment:
     source: str = "default"
     db_min: Optional[float] = None
     db_max: Optional[float] = None
-    db_cumulative: Optional[float] = None
-    db_cumulative_min: Optional[float] = None
-    db_cumulative_max: Optional[float] = None
-    fiber_length_cumulative_m: Optional[float] = None
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -119,25 +121,11 @@ class AttenuationSegment:
             "db": round(self.db, 4),
             "db_min": round(self.db_min if self.db_min is not None else self.db, 4),
             "db_max": round(self.db_max if self.db_max is not None else self.db, 4),
-            "db_cumulative": (
-                round(self.db_cumulative, 4) if self.db_cumulative is not None else None
-            ),
-            "db_cumulative_min": (
-                round(self.db_cumulative_min, 4)
-                if self.db_cumulative_min is not None else None
-            ),
-            "db_cumulative_max": (
-                round(self.db_cumulative_max, 4)
-                if self.db_cumulative_max is not None else None
-            ),
-            "fiber_length_cumulative_m": (
-                round(self.fiber_length_cumulative_m, 2)
-                if self.fiber_length_cumulative_m is not None else None
-            ),
             "description": self.description,
             "obj_type": self.obj_type,
             "obj_id": self.obj_id,
             "obj_name": self.obj_name,
+            "node_id": self.node_id,
             "port": self.port,
             "port_name": self.port_name,
             "side": self.side,
@@ -158,6 +146,7 @@ class AttenuationSegment:
             obj_type=d.get("obj_type"),
             obj_id=str(d["obj_id"]) if d.get("obj_id") is not None else None,
             obj_name=str(d["obj_name"]) if d.get("obj_name") is not None else None,
+            node_id=int(d["node_id"]) if d.get("node_id") is not None else None,
             port=int(d["port"]) if d.get("port") is not None else None,
             port_name=str(d["port_name"]) if d.get("port_name") is not None else None,
             side=int(d["side"]) if d.get("side") is not None else None,
@@ -167,17 +156,6 @@ class AttenuationSegment:
             source=str(d.get("source") or "default"),
             db_min=float(d["db_min"]) if d.get("db_min") is not None else db,
             db_max=float(d["db_max"]) if d.get("db_max") is not None else db,
-            db_cumulative=float(d["db_cumulative"]) if d.get("db_cumulative") is not None else None,
-            db_cumulative_min=(
-                float(d["db_cumulative_min"]) if d.get("db_cumulative_min") is not None else None
-            ),
-            db_cumulative_max=(
-                float(d["db_cumulative_max"]) if d.get("db_cumulative_max") is not None else None
-            ),
-            fiber_length_cumulative_m=(
-                float(d["fiber_length_cumulative_m"])
-                if d.get("fiber_length_cumulative_m") is not None else None
-            ),
             meta=dict(d.get("meta") or {}),
         )
 
@@ -272,6 +250,8 @@ class PathReport:
             bits = []
             if s.obj_type and s.obj_id:
                 bits.append(f"{s.obj_type}:{s.obj_id}")
+            if s.node_id is not None:
+                bits.append(f"node={s.node_id}")
             if s.obj_name:
                 bits.append(f"name={s.obj_name}")
             if s.side is not None or s.port is not None:
@@ -285,10 +265,6 @@ class PathReport:
                 bits.append(f"Lsrc={s.length_source}")
             bits.append(f"min={s.db_min:.3f}")
             bits.append(f"max={s.db_max:.3f}")
-            if s.db_cumulative is not None:
-                bits.append(f"Σ={s.db_cumulative:.3f}")
-            if s.fiber_length_cumulative_m is not None:
-                bits.append(f"LΣ={s.fiber_length_cumulative_m:.1f}m")
             if s.source:
                 bits.append(f"src={s.source}")
             extra = " [" + ", ".join(bits) + "]"
