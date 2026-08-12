@@ -13,6 +13,7 @@ from .topology_build_methods import NetworkTopologyBuildMixin
 
 _logger = None
 
+
 def _get_logger():
     global _logger
     if _logger is None:
@@ -20,12 +21,14 @@ def _get_logger():
         _logger = log
     return _logger
 
+
 def _normalize_set(value):
     if value is None:
         return None
     if isinstance(value, (int, str)):
         return {int(value)}
     return set(value)
+
 
 class NetworkTopology(NetworkTopologyBuildMixin):
     """Высокоуровневый API топологии: список CGraph и один FNGraph."""
@@ -51,16 +54,68 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         )
 
     def _add_cgraph(self, cgraph: Optional[CGraph]) -> None:
+        """Добавить CGraph. Несвязный граф → разбить на связные компоненты.
+
+        Каждый порт OLT даёт своё дерево; в одном CGraph они не должны
+        смешиваться. Если всё же пришла несвязная компонента — режем.
+        """
         if cgraph is None or cgraph.vcount() == 0:
             return
-        if not cgraph.is_connected():
-            # Несколько стартовых портов (port=[19,20]) часто дают 2+ компоненты.
-            # CGraph можно хранить несвязным; FNGraph в конце обязан быть связным.
+        if cgraph.is_connected():
+            self.cgraphs.append(cgraph)
+            return
+        parts = self._split_cgraph_components(cgraph)
+        if not parts:
             self.logger.warning(
-                "CGraph не связный (v=%s e=%s) — добавляем как есть",
+                "CGraph не связный (v=%s e=%s) и не удалось разбить — пропускаем",
                 cgraph.vcount(), cgraph.ecount(),
             )
-        self.cgraphs.append(cgraph)
+            return
+        self.logger.info(
+            "CGraph не связный (v=%s e=%s) → %s связных компонент",
+            cgraph.vcount(), cgraph.ecount(), len(parts),
+        )
+        for part in parts:
+            if part.vcount() > 0:
+                self.cgraphs.append(part)
+
+    def _split_cgraph_components(self, cgraph: CGraph) -> List[CGraph]:
+        """Разбить несвязный CGraph на список связных подграфов."""
+        if cgraph is None or cgraph.vcount() == 0:
+            return []
+        try:
+            membership = cgraph.g.components().membership
+        except Exception:
+            try:
+                membership = cgraph._g.components().membership
+            except Exception as e:
+                self.logger.warning("components() failed: %s", e)
+                return []
+        groups: dict = {}
+        for vid, cid in enumerate(membership):
+            groups.setdefault(int(cid), []).append(int(vid))
+        if len(groups) <= 1:
+            return [cgraph]
+        out: List[CGraph] = []
+        for vids in groups.values():
+            if not vids:
+                continue
+            try:
+                sub = cgraph.g.subgraph(vids)
+            except Exception:
+                try:
+                    sub = cgraph._g.subgraph(vids)
+                except Exception:
+                    continue
+            part = CGraph(self.client, cache=self.cache)
+            part._g = sub
+            if hasattr(cgraph, "_directed"):
+                part._directed = getattr(cgraph, "_directed", False)
+            if hasattr(cgraph, "_finish_data"):
+                part._finish_data = getattr(cgraph, "_finish_data", None)
+            if part.vcount() > 0:
+                out.append(part)
+        return out
 
     def _set_fngraph(self, fngraph: Optional[FNGraph]) -> None:
         """Промежуточная установка без проверки связности (финал — _finalize_build)."""
@@ -75,52 +130,50 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         fn.build(0)
         if fn.vcount() == 0:
             self.logger.warning(
-                "FNGraph пустой после CGraph (cgraph v=%s e=%s) — "
-                "нет fiber-вершин с node_id / node1/node2",
+                "FNGraph пустой после CGraph (v=%s e=%s)",
                 cgraph.vcount(), cgraph.ecount(),
             )
             return None
         return fn
 
-    def _rebuild_fngraph_from_all_cgraphs(self) -> None:
-        """Собрать один FNGraph из всех CGraph (+ уже заданный, напр. build_from_node)."""
-        prev = self.fngraph
-        self.fngraph = None
-        fns: List[FNGraph] = []
-        if prev is not None and prev.vcount() > 0:
-            fns.append(prev)
-        for cg in self.cgraphs:
-            fn = self._build_fngraph_from_cgraph(cg)
-            if fn is not None and fn.vcount() > 0:
-                fns.append(fn)
-        if not fns:
-            return
-        if len(fns) == 1:
-            self.fngraph = fns[0]
-            return
-        merged = merge_fngraphs(fns, self.client, self.cache)
-        self.fngraph = merged if merged is not None else fns[0]
-
     def _finalize_build(self) -> "NetworkTopology":
-        """После всех CGraph: собрать FNGraph и потребовать связность."""
+        """Собрать FNGraph из всех CGraph; проверить связность FN."""
         from .errors import TopologyBuildError
 
-        self._rebuild_fngraph_from_all_cgraphs()
         if not self.cgraphs:
+            self.logger.warning("Нет CGraph для финализации")
             return self
+
+        # FN из каждого CGraph, затем merge
+        fns: List[FNGraph] = []
+        for cg in self.cgraphs:
+            fn = self._build_fngraph_from_cgraph(cg)
+            if fn is not None:
+                fns.append(fn)
+
+        if not fns:
+            self.logger.warning("Не удалось построить ни одного FNGraph")
+            return self
+
+        if len(fns) == 1:
+            self.fngraph = fns[0]
+        else:
+            self.fngraph = merge_fngraphs(fns, client=self.client, cache=self.cache)
+
         if self.fngraph is None or self.fngraph.vcount() == 0:
-            raise TopologyBuildError(
-                "FNGraph не построен: по CGraph не удалось извлечь узлы/кабели"
-            )
+            self.logger.warning("FNGraph пуст после merge")
+            return self
+
         if not self.fngraph.is_connected():
-            raise TopologyBuildError(
-                f"FNGraph не связный (v={self.fngraph.vcount()} "
-                f"e={self.fngraph.ecount()}). Ожидается один связный граф сооружений."
+            self.logger.warning(
+                "FNGraph не связный (v=%s e=%s)",
+                self.fngraph.vcount(), self.fngraph.ecount(),
             )
-        self.logger.info(
-            "FNGraph OK: v=%s e=%s (из %s CGraph)",
-            self.fngraph.vcount(), self.fngraph.ecount(), len(self.cgraphs),
-        )
+        else:
+            self.logger.info(
+                "FNGraph OK: v=%s e=%s (из %s CGraph)",
+                self.fngraph.vcount(), self.fngraph.ecount(), len(self.cgraphs),
+            )
         return self
 
     def _build_cgraph(
@@ -128,6 +181,27 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         included_fibers=None, excluded_fibers=None, excluded_nodes=None,
         linear=False, linear_on_fail="raise",
     ) -> Optional[CGraph]:
+        """Построить один CGraph.
+
+        Несколько портов (port=[19,20]) → каждый порт отдельным связным
+        CGraph через _build_cgraphs_per_port.
+        """
+        from .ports_spec import expand_ports
+        ports = expand_ports(port)
+        if ports is not None and len(ports) > 1:
+            graphs = self._build_cgraphs_per_port(
+                obj_type, obj_id, ports=ports, side=side,
+                included_fibers=included_fibers, excluded_fibers=excluded_fibers,
+                excluded_nodes=excluded_nodes, linear=linear, linear_on_fail=linear_on_fail,
+            )
+            if not graphs:
+                return None
+            if len(graphs) == 1:
+                return graphs[0]
+            for g in graphs:
+                self._add_cgraph(g)
+            return None
+
         cg = CGraph(self.client, cache=self.cache)
         try:
             cg.build(
@@ -140,15 +214,39 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                     "CGraph пустой от %s:%s (port=%r)", obj_type, obj_id, port
                 )
                 return None
-            if not cg.is_connected():
-                self.logger.warning(
-                    "CGraph от %s:%s не связный (v=%s e=%s) — оставляем",
-                    obj_type, obj_id, cg.vcount(), cg.ecount(),
-                )
             return cg
         except Exception as e:
             self.logger.error(f"Ошибка построения CGraph от {obj_type}:{obj_id}: {e}")
             return None
+
+    def _build_cgraphs_per_port(
+        self, obj_type, obj_id, *, ports, side=None,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+        linear=False, linear_on_fail="raise",
+    ) -> List[CGraph]:
+        """Один связный CGraph на каждый порт (OLT multi-port)."""
+        out: List[CGraph] = []
+        for p in sorted(ports):
+            cg = CGraph(self.client, cache=self.cache)
+            try:
+                cg.build(
+                    obj_type, obj_id, port=p, side=side,
+                    included_fibers=included_fibers, excluded_fibers=excluded_fibers,
+                    excluded_nodes=excluded_nodes, linear=linear,
+                    linear_on_fail=linear_on_fail,
+                )
+            except Exception as e:
+                self.logger.error(
+                    "Ошибка CGraph от %s:%s port=%s: %s", obj_type, obj_id, p, e
+                )
+                continue
+            if cg.vcount() == 0:
+                self.logger.debug(
+                    "CGraph пустой от %s:%s port=%s — пропускаем", obj_type, obj_id, p
+                )
+                continue
+            out.append(cg)
+        return out
 
     def _attach(self, cgraph: Optional[CGraph]) -> None:
         """Только добавить CGraph. FNGraph собирается в _finalize_build()."""
@@ -198,180 +296,3 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         except Exception as e:
             self.logger.warning(f"Ошибка поиска кабелей в узле {node_id}: {e}")
         return objects
-
-    def get_linear(
-        self, start_type, start_id, end_type=None, end_id=None, *,
-        port=None, side=None, source="cgraph", cgraph_index=0,
-        start_node_id=None, end_node_id=None,
-    ) -> "NetworkTopology":
-        """Линейный подграф из уже построенного CGraph или FNGraph."""
-        from .errors import TopologyBuildError
-        from .linear_extract import extract_linear_cgraph, extract_linear_fngraph
-        new_topo = NetworkTopology(self.client, cache=self.cache)
-        if source == "fngraph":
-            if self.fngraph is None:
-                raise TopologyBuildError("FNGraph не построен")
-            sn = start_node_id
-            if sn is None and start_type in ("node", "facility"):
-                sn = int(start_id)
-            if sn is None:
-                raise TopologyBuildError("для source=fngraph укажите start_node_id")
-            en = end_node_id
-            if en is None and end_id is not None:
-                try:
-                    en = int(end_id)
-                except (TypeError, ValueError):
-                    en = None
-            new_topo._set_fngraph(extract_linear_fngraph(self.fngraph, sn, en))
-            return new_topo._finalize_build()
-        if not self.cgraphs:
-            raise TopologyBuildError("Нет CGraph. Сначала build_from_*")
-        if cgraph_index < 0 or cgraph_index >= len(self.cgraphs):
-            raise TopologyBuildError(f"cgraph_index={cgraph_index} вне диапазона")
-        linear_cg = extract_linear_cgraph(
-            self.cgraphs[cgraph_index], start_type, start_id, end_type, end_id,
-            port=port, side=side,
-        )
-        new_topo._add_cgraph(linear_cg)
-        return new_topo._finalize_build()
-
-    def get_finish_by_node(self, node_id: int) -> List[Any]:
-        result = []
-        for cgraph in self.cgraphs:
-            for v in cgraph.vs:
-                if v.attributes().get("node_id") != node_id:
-                    continue
-                if v.attributes().get("terminate_vertex"):
-                    result.extend(v.attributes().get("finish_data") or [])
-        seen, unique = set(), []
-        for item in result:
-            cid = getattr(item, "connect_id", id(item))
-            if cid not in seen:
-                seen.add(cid)
-                unique.append(item)
-        return unique
-
-    def get_finish_by_object(self, object_type: str, object_id: Union[int, str]):
-        for cgraph in self.cgraphs:
-            for v in cgraph.vs:
-                if v["obj_type"] == object_type and str(v["obj_id"]) == str(object_id):
-                    finish = v.attributes().get("finish_data") or []
-                    return finish[0] if finish else None
-        return None
-
-    def _collect_ids(self, obj_type: str) -> List:
-        ids = set()
-        for cg in self.cgraphs:
-            for v in cg.vs:
-                if v["obj_type"] == obj_type:
-                    ids.add(v["obj_id"])
-        return list(ids)
-
-    def get_customers(self) -> List[int]:
-        return [int(i) for i in self._collect_ids(TYPE_CUSTOMER)]
-
-    def get_nodes(self) -> List[int]:
-        if self.fngraph is None:
-            return []
-        return [int(v["node_id"]) for v in self.fngraph.vs]
-
-    def get_cables(self) -> List[int]:
-        if self.fngraph is None:
-            return []
-        return list({
-            int(e.attributes().get("fiber_id", 0))
-            for e in self.fngraph.es
-            if e.attributes().get("fiber_id") is not None
-        })
-
-    def get_fibers(self) -> List[int]:
-        return [int(i) for i in self._collect_ids(TYPE_FIBER)]
-
-    def get_devices(self) -> List[int]:
-        ids = set()
-        for cg in self.cgraphs:
-            for v in cg.vs:
-                if v["obj_type"] in DEVICE_TYPES:
-                    ids.add(int(v["obj_id"]))
-        return list(ids)
-
-    def get_splitters(self) -> List[int]:
-        return [int(i) for i in self._collect_ids(TYPE_SPLITTER)]
-
-    def get_cwdms(self) -> List[int]:
-        return [int(i) for i in self._collect_ids(TYPE_CWDM)]
-
-    def get_crosses(self) -> List[str]:
-        return [str(i) for i in self._collect_ids(TYPE_CROSS)]
-
-    def customer(self, customer_id: int):
-        return self.cache.get_customer(self.client, customer_id)
-
-    def node(self, node_id: int):
-        return self.cache.get_node(self.client, node_id)
-
-    def cable(self, cable_id: int):
-        return self.cache.get_fiber(self.client, cable_id)
-
-    def fiber(self, fiber_id: int):
-        return self.cache.get_fiber(self.client, fiber_id)
-
-    def device(self, device_id: int):
-        for t in DEVICE_TYPES:
-            obj = self.cache.get_device(self.client, t, device_id)
-            if obj is not None:
-                return obj
-        return None
-
-    def splitter(self, splitter_id: int):
-        return self.cache.get_splitter(self.client, splitter_id)
-
-    def cwdm(self, cwdm_id: int):
-        return self.cache.get_cwdm(self.client, cwdm_id)
-
-    def cross(self, cross_uuid: str):
-        return self.cache.get_cross(self.client, cross_uuid)
-
-    def save_to_file(self, filepath: str) -> None:
-        import pickle
-        data = {
-            "client": {
-                "url": getattr(self.client, "_url", ""),
-                "apikey": getattr(self.client, "_apikey", ""),
-            },
-            "cgraphs": [cg.to_dict() for cg in self.cgraphs],
-            "fngraph": self.fngraph.to_dict() if self.fngraph else None,
-            "cache": self.cache.to_dict(),
-            "version": NetworkTopology._data_version,
-        }
-        with open(filepath, "wb") as f:
-            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        self.logger.info(f"Топология сохранена в {filepath}")
-
-    @classmethod
-    def load_from_file(cls, filepath: str) -> "NetworkTopology":
-        import pickle
-        with open(filepath, "rb") as f:
-            data = pickle.load(f)
-        if data.get("version") != NetworkTopology._data_version:
-            raise ValueError(
-                f"Неподдерживаемая версия данных {data.get('version')}, "
-                f"текущая {NetworkTopology._data_version}"
-            )
-        cache = DataCache.from_dict(data.get("cache", {}))
-        client = WorkerNetClient("", data["client"]["apikey"])
-        client._url = data["client"]["url"]
-        topology = cls(client, cache=cache)
-        for cg_data in data.get("cgraphs", []):
-            topology.cgraphs.append(CGraph.from_dict(cg_data, client, cache))
-        if data.get("fngraph"):
-            topology.fngraph = FNGraph.from_dict(data["fngraph"], client, cache)
-        topology.logger.info(f"Топология загружена из {filepath}")
-        return topology
-
-    def __repr__(self) -> str:
-        fn = (
-            "None" if self.fngraph is None
-            else f"{self.fngraph.vcount()} nodes, {self.fngraph.ecount()} fibers"
-        )
-        return f"NetworkTopology(CGraphs: {len(self.cgraphs)}, FNGraph: {fn})"
