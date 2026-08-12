@@ -18,6 +18,7 @@ class AttenuationEdgeMixin:
     def _edge_segments(
         self, u: int, v: int, *, direction: str = "unknown",
         path_endpoints: Optional[set] = None,
+        cross_adapter_seen: Optional[Set[str]] = None,
     ) -> List[AttenuationSegment]:
         path_endpoints = path_endpoints or set()
         segs: List[AttenuationSegment] = []
@@ -59,11 +60,14 @@ class AttenuationEdgeMixin:
             segs.extend(self._splitter_segments(out_v, direction=direction))
             return segs
 
-        # Внутренняя коммутация кросса (порт↔порт): путь идёт дальше → adapter
+        # Внутренняя коммутация кросса (порт↔порт): один adapter на проход.
         if is_internal and ta == TYPE_CROSS and tb == TYPE_CROSS and ida == idb:
-            segs.append(self._cross_adapter_segment(
+            seg = self._maybe_cross_adapter(
                 ua, cross_id=ida, connect_id=connect_id, reason="internal",
-            ))
+                cross_adapter_seen=cross_adapter_seen,
+            )
+            if seg is not None:
+                segs.append(seg)
             return segs
 
         if not is_internal:
@@ -73,6 +77,7 @@ class AttenuationEdgeMixin:
                 path_endpoints=path_endpoints,
                 u_idx=u,
                 v_idx=v,
+                cross_adapter_seen=cross_adapter_seen,
             ))
         return segs
 
@@ -87,6 +92,20 @@ class AttenuationEdgeMixin:
             return self.catalog.adapter_db_triple()
         db = self.catalog.adapter_db(use_max=self.use_max)
         return db, db, db
+
+    def _maybe_cross_adapter(
+        self, cross_attrs: dict, *, cross_id, connect_id=None, reason: str = "",
+        cross_adapter_seen: Optional[Set[str]] = None,
+    ) -> Optional[AttenuationSegment]:
+        """Один adapter на кросс за путь (не на каждый коннектор пришёл/ушёл)."""
+        cid = str(cross_id)
+        if cross_adapter_seen is not None:
+            if cid in cross_adapter_seen:
+                return None
+            cross_adapter_seen.add(cid)
+        return self._cross_adapter_segment(
+            cross_attrs, cross_id=cid, connect_id=connect_id, reason=reason,
+        )
 
     def _cross_adapter_segment(
         self, cross_attrs: dict, *, cross_id, connect_id=None, reason: str = "",
@@ -137,6 +156,7 @@ class AttenuationEdgeMixin:
         path_endpoints: Optional[set] = None,
         u_idx: Optional[int] = None,
         v_idx: Optional[int] = None,
+        cross_adapter_seen: Optional[Set[str]] = None,
     ) -> List[AttenuationSegment]:
         ta, tb = ua.get("obj_type"), va.get("obj_type")
         ida, idb = str(ua.get("obj_id")), str(va.get("obj_id"))
@@ -159,8 +179,9 @@ class AttenuationEdgeMixin:
             )]
 
         if TYPE_CROSS in kinds:
-            # Кросс — конец/начало пути расчёта → connector.
-            # Кросс промежуточный (путь идёт дальше) → adapter.
+            # Кросс — конец/начало пути → connector (на стыке с терминалом).
+            # Кросс промежуточный → ровно 1 adapter на весь проход
+            # (два коннектора пришёл/ушёл сидят в одном адаптере).
             cross_is_endpoint = False
             if ta == TYPE_CROSS and u_idx is not None and u_idx in path_endpoints:
                 cross_is_endpoint = True
@@ -175,10 +196,11 @@ class AttenuationEdgeMixin:
                 return [self._cross_connector_segment(
                     cross_attrs, other_attrs, connect_id=connect_id,
                 )]
-            return [self._cross_adapter_segment(
+            seg = self._maybe_cross_adapter(
                 cross_attrs, cross_id=cross_id, connect_id=connect_id,
-                reason="through",
-            )]
+                reason="through", cross_adapter_seen=cross_adapter_seen,
+            )
+            return [seg] if seg is not None else []
 
         terminal = kinds & _TERMINAL_CONNECTOR_TYPES
         if terminal:
