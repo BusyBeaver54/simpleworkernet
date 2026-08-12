@@ -59,6 +59,11 @@ def _obj_display_name(vattrs: dict) -> Optional[str]:
         return None
     obj = vattrs.get("api_obj")
     oid = str(vattrs.get("obj_id") or "")
+    # сплиттер: имя из inventory через splitter_load
+    if str(vattrs.get("obj_type") or "") == TYPE_SPLITTER and obj is not None:
+        sn = splitter_load.extract_splitter_name(obj)
+        if sn and not _looks_like_iface_label(sn) and sn != oid:
+            return sn
     name = _attr(
         obj,
         "name", "title", "label", "caption",
@@ -238,16 +243,8 @@ class AttenuationSegmentsMixin:
         return resolve_fiber_length_m(fiber_obj, slack_k=slack)
 
     def _splitter_catalog_id(self, splitter_obj: Any) -> Optional[int]:
-        """catalog_id из api_obj (вершина / cache / Splitter API)."""
-        if splitter_obj is None:
-            return None
-        cid = getattr(splitter_obj, "catalog_id", None)
-        if cid is None and isinstance(splitter_obj, dict):
-            cid = splitter_obj.get("catalog_id")
-        try:
-            return int(cid) if cid is not None else None
-        except (TypeError, ValueError):
-            return cid
+        """catalog_id из api_obj / inventory (через splitter_load)."""
+        return splitter_load.extract_catalog_id(splitter_obj)
 
     def _resolve_cable_name(self, fiber_vertex_attrs: dict) -> Optional[str]:
         fiber_vertex_attrs = self._ensure_api_obj(fiber_vertex_attrs)
