@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Union
-from .models import PathReport
+from .models import PathReport, DATA_VERSION
 
 
 @dataclass
@@ -17,6 +17,7 @@ class MultiPathReport:
     warnings: List[str] = field(default_factory=list)
     # Параметры поиска/расчёта текущих веток
     query: dict = field(default_factory=dict)
+    dataversion: str = DATA_VERSION
 
     @property
     def count(self) -> int:
@@ -66,6 +67,7 @@ class MultiPathReport:
     def to_dict(self) -> dict:
         return {
             "schema": "simpleworkernet.attenuation.MultiPathReport/v3",
+            "dataversion": self.dataversion or DATA_VERSION,
             "wavelength_nm": self.wavelength_nm,
             "count": self.count,
             "min_db": round(self.min_db, 4),
@@ -85,6 +87,7 @@ class MultiPathReport:
             wavelength_nm=int(d.get("wavelength_nm") or 1550),
             warnings=list(d.get("warnings") or []),
             query=dict(d.get("query") or {}),
+            dataversion=str(d.get("dataversion") or DATA_VERSION),
         )
 
     def to_table(self) -> str:
