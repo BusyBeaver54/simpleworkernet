@@ -106,12 +106,13 @@ class AttenuationPathsMixin:
         obj2_side: Optional[int] = None,
         obj2_port: Optional[int] = None,
         cutoff: int = 200,
-        max_paths: Optional[int] = 50,
+        max_paths: Optional[int] = None,
     ) -> List[List[int]]:
         """Все простые пути между объектами (или от obj1 до авто-терминалов).
 
         Если obj2 не задан — ищем пути до OLT/switch/onu/radio в текущем CGraph.
         Один device_id не дублируется как olt и switch (приоритет olt).
+        max_paths=None — без ограничения числа путей.
         """
         if self.g is None:
             raise AttenuationError("CGraph не задан")
@@ -167,7 +168,7 @@ class AttenuationPathsMixin:
                     if key not in seen:
                         seen.add(key)
                         collected.append(p)
-                    if max_paths and len(collected) >= max_paths:
+                    if max_paths is not None and len(collected) >= max_paths:
                         return collected
 
         if not collected:
@@ -190,7 +191,6 @@ class AttenuationPathsMixin:
         if self.g is None:
             return []
         ex = str(exclude_id) if exclude_id is not None else None
-        # obj_id → (priority, vertex_index)
         best = {}
         for v in self.g.vs:
             ot = v["obj_type"]
