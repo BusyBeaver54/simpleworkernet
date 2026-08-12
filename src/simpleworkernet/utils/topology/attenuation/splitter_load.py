@@ -1,8 +1,15 @@
 # simpleworkernet/utils/topology/attenuation/splitter_load.py
-"""Загрузка api_obj сплиттера: cache → API; нормализация name/catalog_id."""
+"""Загрузка api_obj сплиттера: cache → API; нормализация name/catalog_id.
+
+Важно: после первой попытки API результат (даже «пустой») кэшируется —
+повторных HTTP на тот же splitter_id не будет.
+"""
 from __future__ import annotations
-from typing import Any, Optional
+from typing import Any, Optional, Set
 from ..constants import TYPE_SPLITTER
+
+# id сплиттеров, для которых API уже вызывали в этом процессе (neg-cache)
+_TRIED_API: Set[str] = set()
 
 
 def _attr(obj, *names, default=None):
@@ -51,14 +58,12 @@ def cache_get_object(cache: Any, ot: str, oid: Any) -> Any:
 
 
 def _nested_inventory(obj: Any) -> Any:
-    """inventory / catalog вложенные объекты WorkerNet Splitter."""
     if obj is None:
         return None
     return _attr(obj, "inventory", "inv", "catalog_item", "catalog_obj", "item")
 
 
 def extract_splitter_name(obj: Any) -> Optional[str]:
-    """Имя сплиттера: obj.name → inventory.name → catalog.name."""
     if obj is None:
         return None
     for candidate in (
@@ -74,7 +79,6 @@ def extract_splitter_name(obj: Any) -> Optional[str]:
 
 
 def extract_catalog_id(obj: Any) -> Optional[int]:
-    """catalog_id: obj → inventory → catalog."""
     if obj is None:
         return None
     for candidate in (
@@ -92,7 +96,6 @@ def extract_catalog_id(obj: Any) -> Optional[int]:
 
 
 def splitter_obj_usable(obj: Any) -> bool:
-    """Есть ли у объекта имя или catalog_id для каталога затуханий."""
     if obj is None:
         return False
     if extract_splitter_name(obj):
@@ -103,7 +106,6 @@ def splitter_obj_usable(obj: Any) -> bool:
 
 
 def _unwrap_api_result(result: Any) -> Any:
-    """Splitter.get / get_list → один объект."""
     if result is None:
         return None
     if hasattr(result, "to_list") and callable(result.to_list):
@@ -116,8 +118,15 @@ def _unwrap_api_result(result: Any) -> Any:
     return result
 
 
+def _sid_key(oid: Any) -> str:
+    return str(oid)
+
+
 def load_splitter_api(att: Any, oid: Any) -> Any:
-    """cache.get_splitter(client) → client.Splitter; кладёт в cache."""
+    """cache.get_splitter(client) → client.Splitter; кладёт в cache.
+
+    Если API уже вызывали для этого id — не повторяем (даже при «пустом» ответе).
+    """
     cache = getattr(att, "cache", None)
     client = getattr(att, "client", None)
     if client is None:
@@ -139,7 +148,9 @@ def load_splitter_api(att: Any, oid: Any) -> Any:
         sid = int(oid)
     except (TypeError, ValueError):
         sid = oid
+    key = _sid_key(sid)
 
+    # 1) cache hit
     obj = None
     if cache is not None:
         fn = getattr(cache, "get_splitter", None)
@@ -148,25 +159,32 @@ def load_splitter_api(att: Any, oid: Any) -> Any:
                 obj = fn(client, sid)
             except Exception:
                 obj = None
-            if obj is not None and not splitter_obj_usable(obj):
-                obj = None
+        if obj is None:
+            obj = cache_get_object(cache, TYPE_SPLITTER, sid)
 
-    if obj is None:
-        try:
-            splitter_api = getattr(client, "Splitter", None)
-            if splitter_api is not None:
-                if hasattr(splitter_api, "get") and callable(splitter_api.get):
-                    try:
-                        obj = _unwrap_api_result(splitter_api.get(id=sid))
-                    except TypeError:
-                        obj = _unwrap_api_result(splitter_api.get(sid))
-                if obj is None and hasattr(splitter_api, "get_list") and callable(splitter_api.get_list):
-                    try:
-                        obj = _unwrap_api_result(splitter_api.get_list(object_id=sid))
-                    except TypeError:
-                        obj = _unwrap_api_result(splitter_api.get_list(id=sid))
-        except Exception:
-            obj = None
+    if obj is not None:
+        return obj
+
+    # 2) уже ходили в API — не долбим снова
+    if key in _TRIED_API:
+        return None
+
+    _TRIED_API.add(key)
+    try:
+        splitter_api = getattr(client, "Splitter", None)
+        if splitter_api is not None:
+            if hasattr(splitter_api, "get") and callable(splitter_api.get):
+                try:
+                    obj = _unwrap_api_result(splitter_api.get(id=sid))
+                except TypeError:
+                    obj = _unwrap_api_result(splitter_api.get(sid))
+            if obj is None and hasattr(splitter_api, "get_list") and callable(splitter_api.get_list):
+                try:
+                    obj = _unwrap_api_result(splitter_api.get_list(object_id=sid))
+                except TypeError:
+                    obj = _unwrap_api_result(splitter_api.get_list(id=sid))
+    except Exception:
+        obj = None
 
     if obj is not None and cache is not None:
         set_fn = getattr(cache, "set_object", None)
@@ -181,10 +199,46 @@ def load_splitter_api(att: Any, oid: Any) -> Any:
     return obj
 
 
-def ensure_api_obj(att: Any, vattrs: dict) -> dict:
-    """Подтянуть api_obj: customer/прочие — cache; splitter — cache→API.
+def _write_vertex_api_obj(att: Any, vattrs: dict, obj: Any) -> None:
+    """Записать api_obj на вершину графа, чтобы соседние сегменты/пути не грузили снова."""
+    g = getattr(att, "g", None)
+    if g is None:
+        return
+    ot = vattrs.get("obj_type")
+    oid = vattrs.get("obj_id")
+    side = vattrs.get("side")
+    port = vattrs.get("port")
+    try:
+        vs = g.vs
+    except Exception:
+        return
+    vid = vattrs.get("_vid")
+    if vid is not None:
+        try:
+            vs[int(vid)]["api_obj"] = obj
+            return
+        except Exception:
+            pass
+    try:
+        for v in vs:
+            a = v.attributes()
+            if str(a.get("obj_type") or "") != str(ot or ""):
+                continue
+            if str(a.get("obj_id") or "") != str(oid or ""):
+                continue
+            if side is not None and int(a.get("side") or 0) != int(side or 0):
+                continue
+            if port is not None and int(a.get("port") or 0) != int(port or 0):
+                continue
+            v["api_obj"] = obj
+    except Exception:
+        pass
 
-    После загрузки проставляет obj_name / catalog_id из inventory.
+
+def ensure_api_obj(att: Any, vattrs: dict) -> dict:
+    """Подтянуть api_obj: cache; splitter — cache→API один раз на id.
+
+    Пишет api_obj обратно в вершину графа.
     """
     if not vattrs:
         return vattrs
@@ -194,10 +248,12 @@ def ensure_api_obj(att: Any, vattrs: dict) -> dict:
 
     existing = vattrs.get("api_obj")
     if existing is not None:
-        if ot != TYPE_SPLITTER or splitter_obj_usable(existing):
-            if ot == TYPE_SPLITTER:
-                return _enrich_splitter_attrs(vattrs, existing)
-            return vattrs
+        if ot == TYPE_SPLITTER:
+            return _enrich_splitter_attrs(vattrs, existing)
+        return vattrs
+
+    if vattrs.get("_api_load_done"):
+        return vattrs
 
     if not ot or oid is None or oid == "":
         return vattrs
@@ -205,21 +261,22 @@ def ensure_api_obj(att: Any, vattrs: dict) -> dict:
     cache = getattr(att, "cache", None)
     obj = cache_get_object(cache, ot, oid)
 
-    if ot == TYPE_SPLITTER and not splitter_obj_usable(obj):
-        loaded = load_splitter_api(att, oid)
-        if loaded is not None:
-            obj = loaded
+    if ot == TYPE_SPLITTER and obj is None:
+        obj = load_splitter_api(att, oid)
 
+    vattrs = dict(vattrs)
+    vattrs["_api_load_done"] = True
     if obj is not None:
-        vattrs = dict(vattrs)
         vattrs["api_obj"] = obj
+        _write_vertex_api_obj(att, vattrs, obj)
         if ot == TYPE_SPLITTER:
             vattrs = _enrich_splitter_attrs(vattrs, obj)
+    else:
+        _write_vertex_api_obj(att, vattrs, None)
     return vattrs
 
 
 def _enrich_splitter_attrs(vattrs: dict, obj: Any) -> dict:
-    """Проставить obj_name / catalog_id из api_obj в attrs вершины."""
     vattrs = dict(vattrs)
     name = extract_splitter_name(obj)
     if name and not vattrs.get("obj_name"):
@@ -232,3 +289,44 @@ def _enrich_splitter_attrs(vattrs: dict, obj: Any) -> dict:
         if topo not in (None, ""):
             vattrs["splitter_type"] = str(topo)
     return vattrs
+
+
+def preload_splitters_from_graph(att: Any) -> int:
+    """Один проход по вершинам текущего g: уникальные splitter id → cache/API.
+
+    Возвращает число загруженных объектов.
+    """
+    g = getattr(att, "g", None)
+    if g is None:
+        return 0
+    ids: Set[str] = set()
+    try:
+        for v in g.vs:
+            a = v.attributes()
+            if str(a.get("obj_type") or "") != TYPE_SPLITTER:
+                continue
+            oid = a.get("obj_id")
+            if oid is None or oid == "":
+                continue
+            ids.add(str(oid))
+    except Exception:
+        return 0
+
+    loaded = 0
+    for sid in ids:
+        obj = load_splitter_api(att, sid)
+        if obj is None:
+            continue
+        loaded += 1
+        try:
+            for v in g.vs:
+                a = v.attributes()
+                if str(a.get("obj_type") or "") != TYPE_SPLITTER:
+                    continue
+                if str(a.get("obj_id") or "") != sid:
+                    continue
+                if a.get("api_obj") is None:
+                    v["api_obj"] = obj
+        except Exception:
+            pass
+    return loaded
