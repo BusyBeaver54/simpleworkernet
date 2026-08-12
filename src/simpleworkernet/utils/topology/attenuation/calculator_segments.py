@@ -8,6 +8,7 @@ from ..constants import (
     TYPE_FIBER, TYPE_CROSS,
 )
 from .length import resolve_fiber_length_m
+from . import splitter_load
 
 _SPLITTER_IN_SIDE = 1
 _SPLITTER_OUT_SIDE = 2
@@ -167,34 +168,8 @@ class AttenuationSegmentsMixin:
                 return {}
 
     def _ensure_api_obj(self, vattrs: dict) -> dict:
-        """api_obj только из вершины графа / in-memory cache — без сетевых API.
-
-        Абоненты (customer) при BFS не подгружаются; в calculate() не
-        дёргаем Customer API — берём только то, что уже есть в CGraph/FNGraph.
-        """
-        if not vattrs:
-            return vattrs
-        if vattrs.get("api_obj") is not None:
-            return vattrs
-        ot = str(vattrs.get("obj_type") or "")
-        oid = vattrs.get("obj_id")
-        if not ot or oid is None or oid == "":
-            return vattrs
-        # customer: только данные вершины, без API
-        if ot == TYPE_CUSTOMER:
-            return vattrs
-        cache = getattr(self, "cache", None)
-        obj = None
-        # только in-memory объект кэша (без client → без HTTP)
-        if cache is not None:
-            try:
-                obj = cache.get_object(ot, oid)
-            except Exception:
-                obj = None
-        if obj is not None:
-            vattrs = dict(vattrs)
-            vattrs["api_obj"] = obj
-        return vattrs
+        """Подтянуть api_obj: customer/прочие — cache; splitter — cache→API."""
+        return splitter_load.ensure_api_obj(self, vattrs)
 
     def _fiber_length_m(self, fiber_id) -> Tuple[Optional[float], str]:
         fid = int(fiber_id)
@@ -263,13 +238,16 @@ class AttenuationSegmentsMixin:
         return resolve_fiber_length_m(fiber_obj, slack_k=slack)
 
     def _splitter_catalog_id(self, splitter_obj: Any) -> Optional[int]:
-        """catalog_id только из объекта вершины — без inventory API."""
+        """catalog_id из api_obj (вершина / cache / Splitter API)."""
         if splitter_obj is None:
             return None
         cid = getattr(splitter_obj, "catalog_id", None)
         if cid is None and isinstance(splitter_obj, dict):
             cid = splitter_obj.get("catalog_id")
-        return cid
+        try:
+            return int(cid) if cid is not None else None
+        except (TypeError, ValueError):
+            return cid
 
     def _resolve_cable_name(self, fiber_vertex_attrs: dict) -> Optional[str]:
         fiber_vertex_attrs = self._ensure_api_obj(fiber_vertex_attrs)
