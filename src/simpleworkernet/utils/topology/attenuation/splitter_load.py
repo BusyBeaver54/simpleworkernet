@@ -1,21 +1,17 @@
 # simpleworkernet/utils/topology/attenuation/splitter_load.py
-"""Загрузка api_obj сплиттера + имя/catalog через Inventory.
+"""Загрузка api_obj сплиттера + имя/затухания из JSON-каталога.
 
-WorkerNet Splitter.Get:
-  id, node_id, port_count_in, port_count_out, description, inventory_id
-  — имени и catalog_id НЕТ.
+WorkerNet Splitter.Get даёт inventory_id (без name).
+Имя / ratio / ports / catalog_id — из AttenuationCatalog JSON по inventory_id.
 
-Имя:  inventory_id → Inventory.get_inventory → name / catalog_id
-Каталог: catalog_id → Inventory.get_inventory_catalog → name (опционально)
-
-После первой попытки API по splitter_id повторных HTTP нет (neg-cache).
+Абоненты (customer) по API не загружаются — только in-memory cache.
+Inventory API не вызывается (всё из JSON).
 """
 from __future__ import annotations
 from typing import Any, Optional, Set
-from ..constants import TYPE_SPLITTER
+from ..constants import TYPE_SPLITTER, TYPE_CUSTOMER
 
 _TRIED_API: Set[str] = set()
-_TRIED_INV: Set[str] = set()
 
 
 def _attr(obj, *names, default=None):
@@ -34,6 +30,7 @@ def _attr(obj, *names, default=None):
 
 
 def cache_get_object(cache: Any, ot: str, oid: Any) -> Any:
+    """Только in-memory cache.get_object (без API)."""
     if cache is None:
         return None
     fn = getattr(cache, "get_object", None)
@@ -107,14 +104,14 @@ def load_splitter_api(att: Any, oid: Any) -> Any:
 
     obj = None
     if cache is not None:
-        fn = getattr(cache, "get_splitter", None)
-        if callable(fn):
-            try:
-                obj = fn(client, sid)
-            except Exception:
-                obj = None
+        obj = cache_get_object(cache, TYPE_SPLITTER, sid)
         if obj is None:
-            obj = cache_get_object(cache, TYPE_SPLITTER, sid)
+            fn = getattr(cache, "get_splitter", None)
+            if callable(fn):
+                try:
+                    obj = fn(client, sid)
+                except Exception:
+                    obj = None
 
     if obj is not None:
         return obj
@@ -146,172 +143,29 @@ def load_splitter_api(att: Any, oid: Any) -> Any:
     return obj
 
 
-def load_inventory(att: Any, inventory_id: Any) -> Any:
-    """cache.get_inventory / Inventory.get_inventory."""
-    if inventory_id in (None, ""):
+def _catalog_entry_for_splitter(att: Any, *, inventory_id=None, splitter_id=None) -> Optional[dict]:
+    """Запись из JSON-каталога: inventory_id → id сплиттера."""
+    cat = getattr(att, "catalog", None)
+    if cat is None or not hasattr(cat, "_find_splitter"):
         return None
-    cache = getattr(att, "cache", None)
-    client = _resolve_client(att)
-    key = str(inventory_id)
-
-    if cache is not None:
-        fn = getattr(cache, "get_inventory", None)
-        if callable(fn) and client is not None:
-            try:
-                inv = fn(client, inventory_id)
-                if inv is not None:
-                    return inv
-            except Exception:
-                pass
-        inv_map = getattr(cache, "_inventory", None)
-        if isinstance(inv_map, dict):
-            for k in (inventory_id, key):
-                if k in inv_map and inv_map[k] is not None:
-                    return inv_map[k]
-            try:
-                ik = int(inventory_id)
-                if ik in inv_map:
-                    return inv_map[ik]
-            except (TypeError, ValueError):
-                pass
-
-    if key in _TRIED_INV:
-        return None
-    if client is None:
-        return None
-    _TRIED_INV.add(key)
-
-    inv = None
-    try:
-        inv_api = getattr(client, "Inventory", None)
-        if inv_api is not None and hasattr(inv_api, "get_inventory"):
-            inv = _unwrap_api_result(inv_api.get_inventory(id=int(inventory_id)))
-    except Exception:
-        inv = None
-
-    if inv is not None and cache is not None:
-        inv_map = getattr(cache, "_inventory", None)
-        if isinstance(inv_map, dict):
-            inv_map[inventory_id] = inv
-            try:
-                inv_map[int(inventory_id)] = inv
-            except (TypeError, ValueError):
-                pass
-    return inv
-
-
-def load_inventory_catalog(att: Any, catalog_id: Any) -> Any:
-    if catalog_id in (None, ""):
-        return None
-    cache = getattr(att, "cache", None)
-    client = _resolve_client(att)
-
-    if cache is not None:
-        fn = getattr(cache, "get_inventory_catalog_item", None)
-        if callable(fn) and client is not None:
-            try:
-                item = fn(client, catalog_id)
-                if item is not None:
-                    return item
-            except Exception:
-                pass
-        cat_map = getattr(cache, "_inventory_catalog", None)
-        if isinstance(cat_map, dict):
-            for k in (catalog_id, str(catalog_id)):
-                if k in cat_map and cat_map[k] is not None:
-                    return cat_map[k]
-            try:
-                ck = int(catalog_id)
-                if ck in cat_map:
-                    return cat_map[ck]
-            except (TypeError, ValueError):
-                pass
-
-    if client is None:
-        return None
-    try:
-        inv_api = getattr(client, "Inventory", None)
-        if inv_api is not None and hasattr(inv_api, "get_inventory_catalog"):
-            return _unwrap_api_result(inv_api.get_inventory_catalog(id=int(catalog_id)))
-    except Exception:
-        return None
+    if inventory_id is not None:
+        entry = cat._find_splitter(inventory_id=inventory_id)
+        if entry is not None:
+            return entry
+    if splitter_id is not None:
+        return cat._find_splitter(splitter_id=splitter_id)
     return None
 
 
-def resolve_splitter_identity(att: Any, splitter_obj: Any) -> dict:
-    """{name, catalog_id, inventory_id, topology} из splitter+inventory."""
-    out = {
-        "name": None,
-        "catalog_id": None,
-        "inventory_id": None,
-        "topology": None,
-        "port_count_out": None,
-        "port_count_in": None,
-    }
-    if splitter_obj is None:
-        return out
-
-    pin = _attr(splitter_obj, "port_count_in", "portCountIn")
-    pout = _attr(splitter_obj, "port_count_out", "portCountOut")
-    out["port_count_in"] = pin
-    out["port_count_out"] = pout
+def _topology_from_obj(obj: Any) -> Optional[str]:
+    pin = _attr(obj, "port_count_in", "portCountIn")
+    pout = _attr(obj, "port_count_out", "portCountOut")
     try:
         a, b = int(pin or 0), int(pout or 0)
         if a >= 1 and b >= 1:
-            out["topology"] = f"{a}x{b}"
+            return f"{a}x{b}"
     except (TypeError, ValueError):
         pass
-
-    inv_id = _attr(splitter_obj, "inventory_id", "inventoryId")
-    out["inventory_id"] = inv_id
-
-    inv = load_inventory(att, inv_id) if inv_id is not None else None
-    if inv is not None:
-        name = _attr(inv, "name", "title", "label")
-        cid = _attr(inv, "catalog_id", "catalogId")
-        if name not in (None, ""):
-            out["name"] = str(name).strip()
-        if cid not in (None, ""):
-            try:
-                out["catalog_id"] = int(cid)
-            except (TypeError, ValueError):
-                out["catalog_id"] = cid
-            if not out["name"]:
-                cat = load_inventory_catalog(att, cid)
-                cname = _attr(cat, "name", "title", "label")
-                if cname not in (None, ""):
-                    out["name"] = str(cname).strip()
-
-    return out
-
-
-def extract_splitter_name(obj: Any) -> Optional[str]:
-    if obj is None:
-        return None
-    for candidate in (
-        _attr(obj, "name", "title", "label", "caption", "model", "mark"),
-        _attr(_attr(obj, "inventory", "inv"), "name", "title", "label"),
-    ):
-        if candidate not in (None, ""):
-            s = str(candidate).strip()
-            if s:
-                return s
-    return None
-
-
-def extract_catalog_id(obj: Any) -> Optional[int]:
-    if obj is None:
-        return None
-    for candidate in (
-        _attr(obj, "catalog_id", "catalogId"),
-        _attr(_attr(obj, "inventory", "inv"), "catalog_id", "catalogId"),
-    ):
-        if candidate in (None, ""):
-            continue
-        try:
-            return int(candidate)
-        except (TypeError, ValueError):
-            return candidate
     return None
 
 
@@ -348,13 +202,29 @@ def _write_vertex_attrs(att: Any, vattrs: dict, updates: dict) -> None:
 
 
 def ensure_api_obj(att: Any, vattrs: dict) -> dict:
-    """Подтянуть splitter + inventory name/catalog_id."""
+    """api_obj: customer — только память (без API); splitter — cache→API + JSON-каталог.
+
+    Затухания/имя сплиттера — из JSON по inventory_id, не из Inventory API.
+    """
     if not vattrs:
         return vattrs
 
     ot = str(vattrs.get("obj_type") or "")
     oid = vattrs.get("obj_id")
 
+    # --- абоненты: API запрещён ---
+    if ot == TYPE_CUSTOMER:
+        if vattrs.get("api_obj") is not None:
+            return vattrs
+        if not ot or oid is None or oid == "":
+            return vattrs
+        obj = cache_get_object(getattr(att, "cache", None), ot, oid)
+        if obj is not None:
+            vattrs = dict(vattrs)
+            vattrs["api_obj"] = obj
+        return vattrs
+
+    # --- прочие не-сплиттеры: только память ---
     if ot != TYPE_SPLITTER:
         if vattrs.get("api_obj") is not None:
             return vattrs
@@ -366,8 +236,9 @@ def ensure_api_obj(att: Any, vattrs: dict) -> dict:
             vattrs["api_obj"] = obj
         return vattrs
 
+    # --- splitter ---
     if vattrs.get("_api_load_done") and vattrs.get("api_obj") is not None:
-        if vattrs.get("obj_name") or vattrs.get("catalog_id") is not None:
+        if vattrs.get("inventory_id") is not None or vattrs.get("obj_name"):
             return vattrs
 
     if not ot or oid is None or oid == "":
@@ -386,16 +257,29 @@ def ensure_api_obj(att: Any, vattrs: dict) -> dict:
         vattrs["api_obj"] = obj
         updates["api_obj"] = obj
 
-        ident = resolve_splitter_identity(att, obj)
-        if ident.get("name") and not vattrs.get("obj_name"):
-            vattrs["obj_name"] = ident["name"]
-            updates["obj_name"] = ident["name"]
-        if ident.get("catalog_id") is not None and vattrs.get("catalog_id") is None:
-            vattrs["catalog_id"] = ident["catalog_id"]
-            updates["catalog_id"] = ident["catalog_id"]
-        if ident.get("topology") and not vattrs.get("splitter_type"):
-            vattrs["splitter_type"] = ident["topology"]
-            updates["splitter_type"] = ident["topology"]
+        inv_id = _attr(obj, "inventory_id", "inventoryId")
+        if inv_id is not None:
+            vattrs["inventory_id"] = inv_id
+            updates["inventory_id"] = inv_id
+
+        topo = _topology_from_obj(obj)
+        if topo and not vattrs.get("splitter_type"):
+            vattrs["splitter_type"] = topo
+            updates["splitter_type"] = topo
+
+        entry = _catalog_entry_for_splitter(
+            att, inventory_id=inv_id, splitter_id=oid,
+        )
+        if entry:
+            if entry.get("name") and not vattrs.get("obj_name"):
+                vattrs["obj_name"] = str(entry["name"])
+                updates["obj_name"] = vattrs["obj_name"]
+            if entry.get("catalog_id") is not None and vattrs.get("catalog_id") is None:
+                vattrs["catalog_id"] = entry["catalog_id"]
+                updates["catalog_id"] = entry["catalog_id"]
+            if entry.get("topology") and not vattrs.get("splitter_type"):
+                vattrs["splitter_type"] = str(entry["topology"])
+                updates["splitter_type"] = vattrs["splitter_type"]
 
     if updates:
         _write_vertex_attrs(att, vattrs, updates)
@@ -403,19 +287,8 @@ def ensure_api_obj(att: Any, vattrs: dict) -> dict:
 
 
 def preload_splitters_from_graph(att: Any) -> int:
-    """Уникальные splitter id → Splitter + Inventory (имя/catalog)."""
+    """Уникальные splitter id → Splitter API + JSON-каталог (без Inventory API)."""
     g = getattr(att, "g", None)
-    cache = getattr(att, "cache", None)
-    client = _resolve_client(att)
-
-    if cache is not None and client is not None:
-        fn = getattr(cache, "preload_splitter_inventory", None)
-        if callable(fn):
-            try:
-                fn(client)
-            except Exception:
-                pass
-
     if g is None:
         return 0
 
@@ -438,7 +311,11 @@ def preload_splitters_from_graph(att: Any) -> int:
         if obj is None:
             continue
         loaded += 1
-        ident = resolve_splitter_identity(att, obj)
+        inv_id = _attr(obj, "inventory_id", "inventoryId")
+        topo = _topology_from_obj(obj)
+        entry = _catalog_entry_for_splitter(
+            att, inventory_id=inv_id, splitter_id=sid,
+        )
         try:
             for v in g.vs:
                 a = v.attributes()
@@ -447,12 +324,45 @@ def preload_splitters_from_graph(att: Any) -> int:
                 if str(a.get("obj_id") or "") != sid:
                     continue
                 v["api_obj"] = obj
-                if ident.get("name"):
-                    v["obj_name"] = ident["name"]
-                if ident.get("catalog_id") is not None:
-                    v["catalog_id"] = ident["catalog_id"]
-                if ident.get("topology") and not a.get("splitter_type"):
-                    v["splitter_type"] = ident["topology"]
+                if inv_id is not None:
+                    v["inventory_id"] = inv_id
+                if topo and not a.get("splitter_type"):
+                    v["splitter_type"] = topo
+                if entry:
+                    if entry.get("name"):
+                        v["obj_name"] = str(entry["name"])
+                    if entry.get("catalog_id") is not None:
+                        v["catalog_id"] = entry["catalog_id"]
+                    if entry.get("topology") and not a.get("splitter_type"):
+                        v["splitter_type"] = str(entry["topology"])
         except Exception:
             pass
     return loaded
+
+
+def extract_splitter_name(obj: Any) -> Optional[str]:
+    if obj is None:
+        return None
+    for candidate in (
+        _attr(obj, "name", "title", "label"),
+        _attr(_attr(obj, "inventory", "inv"), "name", "title"),
+    ):
+        if candidate not in (None, ""):
+            return str(candidate).strip() or None
+    return None
+
+
+def extract_catalog_id(obj: Any) -> Optional[int]:
+    if obj is None:
+        return None
+    for candidate in (
+        _attr(obj, "catalog_id", "catalogId"),
+        _attr(_attr(obj, "inventory", "inv"), "catalog_id", "catalogId"),
+    ):
+        if candidate in (None, ""):
+            continue
+        try:
+            return int(candidate)
+        except (TypeError, ValueError):
+            return candidate
+    return None
