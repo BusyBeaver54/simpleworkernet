@@ -5,8 +5,12 @@ DataCache — слой загрузки и кэширования объекто
 Можно шарить один экземпляр между несколькими NetworkTopology.
 
 Фоновая предзагрузка get_all_* — параллельные потоки (I/O-bound;
-объекты API не pickle-ятся в отдельные процессы). Основной код
-продолжает работу; результат подхватывается из _all_objects.
+объекты API не pickle-ятся в отдельные процессы).
+
+preload_async() только ставит задачи в ThreadPoolExecutor и сразу
+возвращает управление. Ждать завершения нужно явно через wait_preload().
+Точечные get_*/get_or_load_* НЕ ждут bulk-preload: если объекта ещё
+нет в кэше — идёт одиночный API-запрос.
 """
 
 from __future__ import annotations
@@ -114,7 +118,7 @@ class DataCache:
         """
         Args:
             client: клиент API (нужен для preload).
-            preload_types: типы для фоновой предзагрузки.
+            preload_types: типы для фоновой предзагрузки (не блокирует).
             preload: игнорируется (совместимость со старым from_dict).
         """
         _ = preload
@@ -128,6 +132,8 @@ class DataCache:
         self._cable_catalog: Optional[List[Any]] = None
 
         self._lock = threading.RLock()
+        # Короткие критические секции вокруг одного HTTP-вызова.
+        # Не держим на всём bulk, чтобы точечные get_* не ждали preload.
         self._api_lock = threading.RLock()
         self._preload_futures: Dict[str, Future] = {}
         self._preload_executor: Optional[ThreadPoolExecutor] = None
@@ -193,19 +199,14 @@ class DataCache:
     def get_or_load_object(
         self, obj_type: str, obj_id: Union[int, str], loader: Callable[[], Any],
     ) -> Any:
+        """Точечная загрузка. Не ждёт bulk-preload.
+
+        Если preload уже положил объект в кэш — берём из кэша.
+        Иначе одиночный API-запрос (параллельно с фоновым preload).
+        """
         obj = self.get_object(obj_type, obj_id)
         if obj is not None:
             return obj
-        loading = _loading_types()
-        fut = self._preload_future_for(obj_type)
-        if fut is not None and not fut.done() and obj_type not in loading and "device" not in loading:
-            try:
-                fut.result()
-            except Exception:
-                pass
-            obj = self.get_object(obj_type, obj_id)
-            if obj is not None:
-                return obj
         with self._api_lock:
             obj = self.get_object(obj_type, obj_id)
             if obj is not None:
@@ -250,12 +251,18 @@ class DataCache:
         return None
 
     def get_all_objects(self, object_type: str, loader: Callable[[], Any]) -> Dict[Union[int, str], Any]:
+        """Полный список типа. Если идёт preload этого типа — ждём его
+        (чтобы не дублировать bulk-запрос). Иначе грузим сами.
+        """
         with self._lock:
             if object_type in self._all_objects:
                 return self._all_objects[object_type]
         loading = _loading_types()
+        # Мы сами в preload-потоке для этого типа — грузим без ожидания future.
+        if object_type in loading or (object_type in DEVICE_TYPES and "device" in loading):
+            return self._fetch_all_objects(object_type, loader)
         fut = self._preload_future_for(object_type)
-        if fut is not None and not fut.done() and object_type not in loading and "device" not in loading:
+        if fut is not None and not fut.done():
             try:
                 fut.result()
             except Exception:
@@ -276,6 +283,7 @@ class DataCache:
         logger = _get_logger()
         timeout = self._bulk_timeout(object_type)
         objects: List[Any] = []
+        # API-вызов под коротким lock; разбор ответа — без lock.
         with self._api_lock:
             with self._lock:
                 if object_type in self._all_objects:
@@ -288,15 +296,12 @@ class DataCache:
                 logger.error("Ошибка загрузки всех объектов типа %s: %s", object_type, e)
                 objects = []
         obj_dict: Dict[Union[int, str], Any] = {}
-        skipped = 0
         for obj in objects:
             obj_id = _extract_obj_id(obj)
             if obj_id is not None:
                 for oid in self._id_variants(obj_id):
                     obj_dict[oid] = obj
                 self.set_object(object_type, obj_id, obj)
-            else:
-                skipped += 1
         with self._lock:
             existing = self._all_objects.get(object_type)
             if existing:
@@ -312,6 +317,11 @@ class DataCache:
         include_customers: Optional[bool] = None,
         workers: Optional[int] = None,
     ) -> Dict[str, Future]:
+        """Запустить bulk-загрузку в фоне. Не блокирует вызывающий поток.
+
+        Дождаться: ``cache.wait_preload()``.
+        Статус: ``cache.preload_status()``.
+        """
         try:
             from ...core.config import config_manager
             default_types = list(config_manager.preload_types)
@@ -327,7 +337,7 @@ class DataCache:
             include_customers = default_customers
         if include_customers and "customer" not in types:
             types = list(types) + ["customer"]
-        n_workers = workers if workers is not None else 1
+        n_workers = workers if workers is not None else default_workers
         n_workers = max(1, min(int(n_workers), max(1, len(list(types)))))
         jobs: Dict[str, Callable[[], Any]] = {
             "node": lambda: self.get_all_nodes(client),
@@ -389,6 +399,7 @@ class DataCache:
         return started
 
     def wait_preload(self, timeout: Optional[float] = None) -> None:
+        """Явно дождаться завершения всех preload-задач."""
         for key, fut in list(self._preload_futures.items()):
             try:
                 fut.result(timeout=timeout)
@@ -510,8 +521,10 @@ class DataCache:
             if TYPE_FIBER in self._all_objects:
                 return self._all_objects[TYPE_FIBER]
         loading = _loading_types()
+        if TYPE_FIBER in loading:
+            return self._fetch_all_fibers(client)
         fut = self._preload_futures.get("fiber") or self._preload_futures.get(TYPE_FIBER)
-        if fut is not None and not fut.done() and TYPE_FIBER not in loading:
+        if fut is not None and not fut.done():
             try:
                 fut.result()
             except Exception:
@@ -521,40 +534,51 @@ class DataCache:
                     return self._all_objects[TYPE_FIBER]
         loading.add(TYPE_FIBER)
         try:
-            logger = _get_logger()
-            timeout = self._bulk_timeout(TYPE_FIBER)
-            result: Dict[Union[int, str], Any] = {}
-            with self._api_lock:
-                with self._lock:
-                    if TYPE_FIBER in self._all_objects:
-                        return self._all_objects[TYPE_FIBER]
-                try:
-                    with _temporary_timeout(timeout):
-                        catalog = client.Fiber.catalog_types_get()
-                    for cab_type in _result_to_objects(catalog):
-                        type_id = _extract_obj_id(cab_type)
-                        if type_id is None:
-                            continue
-                        try:
-                            with _temporary_timeout(timeout):
-                                batch = client.Fiber.get_list(cable_line_type_id=type_id)
-                            objects = _result_to_objects(batch)
-                        except Exception as e:
-                            logger.error("Ошибка загрузки fiber cable_line_type_id=%s: %s", type_id, e)
-                            objects = []
-                        for obj in objects:
-                            obj_id = _extract_obj_id(obj)
-                            if obj_id is not None:
-                                for oid in self._id_variants(obj_id):
-                                    result[oid] = obj
-                                self.set_object(TYPE_FIBER, obj_id, obj)
-                except Exception as e:
-                    logger.error("Ошибка загрузки всех fiber: %s", e)
-            with self._lock:
-                self._all_objects[TYPE_FIBER] = result
-            return result
+            return self._fetch_all_fibers(client)
         finally:
             loading.discard(TYPE_FIBER)
+
+    def _fetch_all_fibers(self, client: WorkerNetClient) -> Dict[int, Any]:
+        logger = _get_logger()
+        timeout = self._bulk_timeout(TYPE_FIBER)
+        result: Dict[Union[int, str], Any] = {}
+        with self._lock:
+            if TYPE_FIBER in self._all_objects:
+                return self._all_objects[TYPE_FIBER]
+        try:
+            with self._api_lock:
+                with _temporary_timeout(timeout):
+                    catalog = client.Fiber.catalog_types_get()
+            for cab_type in _result_to_objects(catalog):
+                type_id = _extract_obj_id(cab_type)
+                if type_id is None:
+                    continue
+                try:
+                    # Каждый batch — отдельная секция lock, чтобы точечные
+                    # get_fiber могли проходить между запросами preload.
+                    with self._api_lock:
+                        with _temporary_timeout(timeout):
+                            batch = client.Fiber.get_list(cable_line_type_id=type_id)
+                    objects = _result_to_objects(batch)
+                except Exception as e:
+                    logger.error("Ошибка загрузки fiber cable_line_type_id=%s: %s", type_id, e)
+                    objects = []
+                for obj in objects:
+                    obj_id = _extract_obj_id(obj)
+                    if obj_id is not None:
+                        for oid in self._id_variants(obj_id):
+                            result[oid] = obj
+                        self.set_object(TYPE_FIBER, obj_id, obj)
+        except Exception as e:
+            logger.error("Ошибка загрузки всех fiber: %s", e)
+        with self._lock:
+            existing = self._all_objects.get(TYPE_FIBER)
+            if existing:
+                existing.update(result)
+                result = existing
+            else:
+                self._all_objects[TYPE_FIBER] = result
+        return result
 
     def get_all_devices(self, client: WorkerNetClient) -> Dict[int, Any]:
         result: Dict[int, Any] = {}
