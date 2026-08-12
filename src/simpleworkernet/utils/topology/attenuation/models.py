@@ -21,6 +21,8 @@ class EndpointInfo:
     port_name: Optional[str] = None
     host: Optional[str] = None
     commutation_index: Optional[int] = None
+    # Для customer: login = номер договора (Customer.login)
+    login: Optional[str] = None
     label: str = ""
     meta: dict = field(default_factory=dict)
 
@@ -34,6 +36,7 @@ class EndpointInfo:
             "port_name": self.port_name,
             "host": self.host,
             "commutation_index": self.commutation_index,
+            "login": self.login,
             "label": self.label,
         }
         if self.meta:
@@ -53,18 +56,17 @@ class EndpointInfo:
             port_name=str(d["port_name"]) if d.get("port_name") is not None else None,
             host=str(d["host"]) if d.get("host") is not None else None,
             commutation_index=int(d["commutation_index"]) if d.get("commutation_index") is not None else None,
+            login=str(d["login"]) if d.get("login") is not None else None,
             label=str(d.get("label") or ""),
             meta=dict(d.get("meta") or {}),
         )
 
     def format_sp(self) -> str:
-        """Компактная метка стороны/порта: s1p0."""
         s = self.side if self.side is not None else "?"
         p = self.port if self.port is not None else "?"
         return f"s{s}p{p}"
 
     def format_header(self) -> str:
-        """Строка для шапки to_table: type:id sNpM + host/name/port_name."""
         parts = [f"{self.obj_type}:{self.obj_id}", self.format_sp()]
         if self.host:
             parts.append(f"host={self.host}")
@@ -74,6 +76,8 @@ class EndpointInfo:
             parts.append(f"port={self.port_name}")
         if self.commutation_index is not None:
             parts.append(f"commutation={self.commutation_index}")
+        if self.login:
+            parts.append(f"login={self.login}")
         return " ".join(parts)
 
     def __str__(self) -> str:
@@ -97,10 +101,10 @@ class AttenuationSegment:
     source: str = "default"
     db_min: Optional[float] = None
     db_max: Optional[float] = None
-    # Накопительная сумма от корня пути до конца этого сегмента (включительно).
     db_cumulative: Optional[float] = None
     db_cumulative_min: Optional[float] = None
     db_cumulative_max: Optional[float] = None
+    fiber_length_cumulative_m: Optional[float] = None
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -125,6 +129,10 @@ class AttenuationSegment:
             "db_cumulative_max": (
                 round(self.db_cumulative_max, 4)
                 if self.db_cumulative_max is not None else None
+            ),
+            "fiber_length_cumulative_m": (
+                round(self.fiber_length_cumulative_m, 2)
+                if self.fiber_length_cumulative_m is not None else None
             ),
             "description": self.description,
             "obj_type": self.obj_type,
@@ -165,6 +173,10 @@ class AttenuationSegment:
             ),
             db_cumulative_max=(
                 float(d["db_cumulative_max"]) if d.get("db_cumulative_max") is not None else None
+            ),
+            fiber_length_cumulative_m=(
+                float(d["fiber_length_cumulative_m"])
+                if d.get("fiber_length_cumulative_m") is not None else None
             ),
             meta=dict(d.get("meta") or {}),
         )
@@ -212,7 +224,6 @@ class PathReport:
         return {k: round(v, 4) for k, v in out.items()}
 
     def _pick_device_customer(self):
-        """Определить оборудование (olt/switch/…) и абонента среди концов."""
         device = self.device_endpoint
         customer = self.customer_endpoint
         ends = [ep for ep in (self.from_endpoint, self.to_endpoint) if ep is not None]
@@ -276,6 +287,8 @@ class PathReport:
             bits.append(f"max={s.db_max:.3f}")
             if s.db_cumulative is not None:
                 bits.append(f"Σ={s.db_cumulative:.3f}")
+            if s.fiber_length_cumulative_m is not None:
+                bits.append(f"LΣ={s.fiber_length_cumulative_m:.1f}m")
             if s.source:
                 bits.append(f"src={s.source}")
             extra = " [" + ", ".join(bits) + "]"
