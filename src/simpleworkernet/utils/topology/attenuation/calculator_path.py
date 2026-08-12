@@ -52,7 +52,10 @@ class AttenuationPathMixin(AttenuationPathFiberMixin):
         side = int(splitter_vertex_attrs.get("side") or edge_side or 0)
         port = int(splitter_vertex_attrs.get("port") or 0)
         splitter_obj = splitter_vertex_attrs.get("api_obj")
-        catalog_id = self._splitter_catalog_id(splitter_obj)
+        # catalog_id / name проставляет ensure_api_obj через Inventory
+        catalog_id = splitter_vertex_attrs.get("catalog_id")
+        if catalog_id is None:
+            catalog_id = self._splitter_catalog_id(splitter_obj)
         pout = None
         if splitter_obj is not None:
             pout = (
