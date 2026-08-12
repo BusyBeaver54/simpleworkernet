@@ -97,6 +97,10 @@ class AttenuationSegment:
     source: str = "default"
     db_min: Optional[float] = None
     db_max: Optional[float] = None
+    # Накопительная сумма от корня пути до конца этого сегмента (включительно).
+    db_cumulative: Optional[float] = None
+    db_cumulative_min: Optional[float] = None
+    db_cumulative_max: Optional[float] = None
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -111,6 +115,17 @@ class AttenuationSegment:
             "db": round(self.db, 4),
             "db_min": round(self.db_min if self.db_min is not None else self.db, 4),
             "db_max": round(self.db_max if self.db_max is not None else self.db, 4),
+            "db_cumulative": (
+                round(self.db_cumulative, 4) if self.db_cumulative is not None else None
+            ),
+            "db_cumulative_min": (
+                round(self.db_cumulative_min, 4)
+                if self.db_cumulative_min is not None else None
+            ),
+            "db_cumulative_max": (
+                round(self.db_cumulative_max, 4)
+                if self.db_cumulative_max is not None else None
+            ),
             "description": self.description,
             "obj_type": self.obj_type,
             "obj_id": self.obj_id,
@@ -144,6 +159,13 @@ class AttenuationSegment:
             source=str(d.get("source") or "default"),
             db_min=float(d["db_min"]) if d.get("db_min") is not None else db,
             db_max=float(d["db_max"]) if d.get("db_max") is not None else db,
+            db_cumulative=float(d["db_cumulative"]) if d.get("db_cumulative") is not None else None,
+            db_cumulative_min=(
+                float(d["db_cumulative_min"]) if d.get("db_cumulative_min") is not None else None
+            ),
+            db_cumulative_max=(
+                float(d["db_cumulative_max"]) if d.get("db_cumulative_max") is not None else None
+            ),
             meta=dict(d.get("meta") or {}),
         )
 
@@ -234,7 +256,7 @@ class PathReport:
             for tag, ep in (("from", self.from_endpoint), ("to", self.to_endpoint)):
                 if ep is not None:
                     lines.append(f"  {tag}: {ep.format_header()}")
-        lines.append("-" * 72)
+        lines.append("-" * 80)
         for i, s in enumerate(self.segments, 1):
             bits = []
             if s.obj_type and s.obj_id:
@@ -252,6 +274,8 @@ class PathReport:
                 bits.append(f"Lsrc={s.length_source}")
             bits.append(f"min={s.db_min:.3f}")
             bits.append(f"max={s.db_max:.3f}")
+            if s.db_cumulative is not None:
+                bits.append(f"Σ={s.db_cumulative:.3f}")
             if s.source:
                 bits.append(f"src={s.source}")
             extra = " [" + ", ".join(bits) + "]"
