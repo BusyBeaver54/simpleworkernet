@@ -11,8 +11,16 @@ class CatalogSplittersMixin:
     def _find_splitter(
         self, *,
         splitter_id=None, catalog_id=None, catalog_name=None,
+        inventory_id=None,
     ) -> Optional[dict]:
         items = self._splitters()
+
+        # inventory_id — основной ключ из Splitter.inventory_id → JSON
+        if inventory_id is not None:
+            iid = str(inventory_id)
+            for entry in items:
+                if str(entry.get("inventory_id") or "") == iid:
+                    return entry
 
         # name — case-insensitive, strip
         if catalog_name:
