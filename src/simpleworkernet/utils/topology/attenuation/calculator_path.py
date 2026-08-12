@@ -38,11 +38,9 @@ class AttenuationPathMixin:
                 if not isinstance(obj, dict)
                 else obj.get("fibers")
             )
-        # точечная подгрузка списка ОВ, если в api_obj нет fibers
         if not fibers and getattr(self, "client", None) is not None:
             fid = fiber_vertex_attrs.get("obj_id")
             try:
-                # предпочтительно Get_list — там есть Color.name
                 result = None
                 if hasattr(self, "cache") and self.cache is not None:
                     try:
@@ -104,15 +102,12 @@ class AttenuationPathMixin:
             return None
 
         def _fiber_color_name(f) -> Optional[str]:
-            """Fiber.Get_list.Fibers.color.name"""
             return _color_obj_name(_f_attr(f, "color", "Color"))
 
         def _module_color_name(f) -> Optional[str]:
-            """Fiber.Get_list.Fibers.moduleColor.name"""
             return _color_obj_name(_f_attr(f, "moduleColor", "module_color", "ModuleColor"))
 
         if fibers and raw_port_i is not None:
-            # 1) по id волокна
             for f in fibers:
                 fid = _f_attr(f, "id")
                 try:
@@ -121,7 +116,6 @@ class AttenuationPathMixin:
                         break
                 except (TypeError, ValueError):
                     continue
-            # 2) по номеру ОВ
             if matched is None:
                 for f in fibers:
                     num = _f_attr(f, "number", "port")
@@ -145,13 +139,11 @@ class AttenuationPathMixin:
             fiber_color = _fiber_color_name(matched)
             module_color = _module_color_name(matched)
         elif raw_port_i is not None:
-            # нет списка волокон: если port небольшой — считаем номером ОВ
             if raw_port_i < 10000:
                 number = raw_port_i
             else:
                 core_id = raw_port_i
 
-        # port_name = цвет волокна; mf_path = m{module}f{number}
         mf_path = None
         if number is not None and module_number is not None:
             mf_path = f"m{module_number}f{number}"
@@ -160,7 +152,6 @@ class AttenuationPathMixin:
 
         port_name = fiber_color
         if not port_name and mf_path:
-            # fallback, если цвета нет в данных
             port_name = mf_path
 
         return {
@@ -175,7 +166,6 @@ class AttenuationPathMixin:
         }
 
     def _fiber_module_index(self, fiber, fibers) -> Optional[int]:
-        """Порядковый номер модуля (1-based) по moduleColor / module_color_id."""
         if fiber is None or not fibers:
             return None
 
@@ -431,7 +421,6 @@ class AttenuationPathMixin:
         host = _olt_host(va) if ot in _dev else None
         port_name = va.get("port_name")
         obj = va.get("api_obj")
-        # OLT/switch/onu/radio: port_name из Device.Get_data.ifaces.ifName
         if ot in _dev and port_i is not None:
             resolved = self._device_port_name(obj, port_i)
             if resolved:
@@ -476,10 +465,6 @@ class AttenuationPathMixin:
         )
 
     def _device_port_name(self, obj: Any, port: int) -> Optional[str]:
-        """Имя порта устройства из Device.Get_data.ifaces.ifName.
-
-        Сопоставление по ifNumber / ifIndex / position.
-        """
         if obj is None:
             return None
 
@@ -531,7 +516,6 @@ class AttenuationPathMixin:
                 name = _entry_name(entry)
                 if name:
                     return name
-                # поиск по значениям
                 for entry in ports.values():
                     if port in _entry_nums(entry):
                         name = _entry_name(entry)
@@ -571,9 +555,12 @@ class AttenuationPathMixin:
             direction = self._direction_of_path(vpath)
         segs: List[AttenuationSegment] = []
         endpoints = {vpath[0], vpath[-1]} if len(vpath) >= 1 else set()
+        # Один adapter на кросс за весь путь (не на каждый стык пришёл/ушёл).
+        cross_adapter_seen: set = set()
         for a, b in zip(vpath, vpath[1:]):
             segs.extend(self._edge_segments(
                 a, b, direction=direction, path_endpoints=endpoints,
+                cross_adapter_seen=cross_adapter_seen,
             ))
         total = sum(s.db for s in segs)
         total_min = sum((s.db_min if s.db_min is not None else s.db) for s in segs)
