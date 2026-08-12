@@ -10,7 +10,6 @@ _AUTO_TARGETS = frozenset({
     TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO,
 })
 
-# Приоритет типа устройства при дедупе одного obj_id (olt важнее switch).
 _DEVICE_TYPE_PRIORITY = {
     TYPE_OLT: 0,
     TYPE_ONU: 1,
@@ -94,6 +93,29 @@ class AttenuationPathsMixin:
             pass
         return []
 
+    def shortest_paths_batch(
+        self, source: int, targets: List[int],
+    ) -> List[List[int]]:
+        """Кратчайшие пути от source ко всем targets одним вызовом igraph.
+
+        Возвращает список путей (пустой список, если пути нет).
+        Порядок соответствует targets.
+        """
+        if self.g is None or not targets:
+            return [[] for _ in targets]
+        if len(targets) == 1:
+            return [self.shortest_path(source, targets[0])]
+        try:
+            paths = self.g.get_shortest_paths(source, to=targets, output="vpath")
+            out: List[List[int]] = []
+            for p in paths:
+                out.append(list(p) if p else [])
+            while len(out) < len(targets):
+                out.append([])
+            return out[: len(targets)]
+        except Exception:
+            return [self.shortest_path(source, t) for t in targets]
+
     def find_paths(
         self,
         obj1_type: str,
@@ -108,12 +130,7 @@ class AttenuationPathsMixin:
         cutoff: int = 200,
         max_paths: Optional[int] = None,
     ) -> List[List[int]]:
-        """Все простые пути между объектами (или от obj1 до авто-терминалов).
-
-        Если obj2 не задан — ищем пути до OLT/switch/onu/radio в текущем CGraph.
-        Один device_id не дублируется как olt и switch (приоритет olt).
-        max_paths=None — без ограничения числа путей.
-        """
+        """Все простые пути между объектами (или от obj1 до авто-терминалов)."""
         if self.g is None:
             raise AttenuationError("CGraph не задан")
 
@@ -151,16 +168,22 @@ class AttenuationPathsMixin:
 
         collected: List[List[int]] = []
         seen = set()
+        only_shortest = max_paths is not None and max_paths <= 1
         for s in sources:
-            for t in targets:
-                if s == t:
-                    continue
-                sp = self.shortest_path(s, t)
+            tgts = [t for t in targets if t != s]
+            if not tgts:
+                continue
+            for sp in self.shortest_paths_batch(s, tgts):
                 if sp and len(sp) >= 2:
                     key = tuple(sp)
                     if key not in seen:
                         seen.add(key)
                         collected.append(sp)
+                    if max_paths and len(collected) >= max_paths:
+                        return collected
+            if only_shortest:
+                continue
+            for t in tgts:
                 for p in self.all_simple_paths(s, t, cutoff=cutoff, max_paths=max_paths):
                     if len(p) < 2:
                         continue
@@ -168,7 +191,7 @@ class AttenuationPathsMixin:
                     if key not in seen:
                         seen.add(key)
                         collected.append(p)
-                    if max_paths is not None and len(collected) >= max_paths:
+                    if max_paths and len(collected) >= max_paths:
                         return collected
 
         if not collected:
@@ -183,11 +206,7 @@ class AttenuationPathsMixin:
         exclude_type: Optional[str] = None,
         exclude_id=None,
     ) -> List[int]:
-        """Терминалы OLT/switch/onu/radio.
-
-        Один физический device (один obj_id) не дублируется:
-        если есть и olt, и switch с одним id — берём olt.
-        """
+        """Терминалы OLT/switch/onu/radio."""
         if self.g is None:
             return []
         ex = str(exclude_id) if exclude_id is not None else None
