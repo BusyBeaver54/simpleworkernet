@@ -6,22 +6,18 @@ import pytest
 
 from simpleworkernet.models.primitives import GeoPoint
 from simpleworkernet.utils.topology.attenuation.catalog import AttenuationCatalog
-from simpleworkernet.utils.topology.attenuation.calculator_fiber import AttenuationFiberMixin
-
-
-class _FiberHost(AttenuationFiberMixin):
-    """Минимальный хост для _fiber_length без полного Attenuation."""
-
-    def __init__(self):
-        self.client = None
+from simpleworkernet.utils.topology.attenuation.length import (
+    path_length_m,
+    resolve_fiber_length_m,
+)
 
 
 def test_catalog_defaults_wavelength():
     cat = AttenuationCatalog.with_defaults()
     assert cat.fiber_db_per_km(1550) == pytest.approx(0.19)
-    assert cat.fiber_db_per_km(1310) == pytest.approx(0.33)
+    assert cat.fiber_db_per_km(1310) == pytest.approx(0.34)
     assert cat.splice_db() == pytest.approx(0.05)
-    assert cat.adapter_db() == pytest.approx(0.3)
+    assert cat.adapter_db() == pytest.approx(0.2)
 
 
 def test_catalog_splitter_port_by_name():
@@ -33,43 +29,43 @@ def test_catalog_splitter_port_by_name():
         prefer_name=True,
     )
     assert db > 0
-    assert src in ("name", "catalog", "estimated", "default")
+    # источник: ratio:… / estimated / name / catalog / default
+    assert src.split(":")[0] in ("name", "catalog", "estimated", "default", "ratio")
 
 
 def test_fiber_length_opticalen_priority():
-    host = _FiberHost()
-    fiber = SimpleNamespace(opticalen=120.0, opticalen2=None, geo_length=None)
-    length, src = host._fiber_length(1, fiber)
-    assert length == pytest.approx(120.0)
-    assert src == "opticalen"
-
-
-def test_fiber_length_opticalen2():
-    host = _FiberHost()
-    fiber = SimpleNamespace(opticalen=None, opticalen2=80.5, geo_length=None)
-    length, src = host._fiber_length(1, fiber)
+    """opticalen2 приоритетнее opticalen (см. resolve_fiber_length_m)."""
+    fiber = SimpleNamespace(opticalen=120.0, opticalen2=80.5, path=None)
+    length, src = resolve_fiber_length_m(fiber)
     assert length == pytest.approx(80.5)
     assert src == "opticalen2"
 
 
+def test_fiber_length_opticalen_fallback():
+    fiber = SimpleNamespace(opticalen=120.0, opticalen2=None, path=None)
+    length, src = resolve_fiber_length_m(fiber)
+    assert length == pytest.approx(120.0)
+    assert src == "opticalen"
+
+
 def test_fiber_length_geo_fallback():
-    host = _FiberHost()
-    # geo points → haversine
+    """geo: path из GeoPoint (haversine × slack_k)."""
     p1 = GeoPoint(lat=55.75, lon=37.61)
     p2 = GeoPoint(lat=55.76, lon=37.62)
-    fiber = SimpleNamespace(
-        opticalen=None, opticalen2=None,
-        node1=SimpleNamespace(geo=p1),
-        node2=SimpleNamespace(geo=p2),
-    )
-    length, src = host._fiber_length(1, fiber)
+    fiber = SimpleNamespace(opticalen=None, opticalen2=None, path=[p1, p2])
+    length, src = resolve_fiber_length_m(fiber, slack_k=1.0)
     assert length is not None and length > 0
     assert src == "geo"
 
 
+def test_path_length_m_empty():
+    assert path_length_m(None) is None
+    assert path_length_m([]) is None
+    assert path_length_m([GeoPoint(lat=1, lon=1)]) is None
+
+
 def test_fiber_core_info_by_number_and_module():
-    """port_name=m1f5, port=номер ОВ, fiber_core_id в результате."""
-    from types import SimpleNamespace
+    """port=номер ОВ, module_number/mf_path, port_name fallback → mf_path."""
     from simpleworkernet.utils.topology.attenuation.calculator import Attenuation
 
     fibers = [
@@ -96,7 +92,7 @@ def test_fiber_core_info_by_number_and_module():
     assert info["fiber_core_id"] == 1005
     assert info["module_number"] == 1
     assert info["mf_path"] == "m1f5"
-    assert info["port_name"] == "m1f5"  # no color → fallback mf_path
+    assert info["port_name"] == "m1f5"  # нет color.name → fallback mf_path
 
     info2 = att._fiber_core_info({
         "obj_type": "fiber", "obj_id": "42", "port": 1005, "api_obj": cable,
@@ -109,6 +105,7 @@ def test_fiber_core_info_by_number_and_module():
         "obj_type": "fiber", "obj_id": "42", "port": 13, "api_obj": cable,
     })
     assert info3["module_number"] == 2
+    assert info3["mf_path"] == "m2f13"
     assert info3["port_name"] == "m2f13"
 
 

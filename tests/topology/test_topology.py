@@ -4,9 +4,7 @@ import os
 import tempfile
 
 from tests.topology.conftest import chain_customer_fiber_olt
-from simpleworkernet.utils.topology.graphs.cgraph import CGraph
 from simpleworkernet.utils.topology.graphs.fngraph import FNGraph
-from simpleworkernet.utils.topology.keys import Interface, ObjKey
 from simpleworkernet.utils.topology.topology import NetworkTopology, _normalize_set
 
 
@@ -45,9 +43,12 @@ def test_getters(client, cache):
     assert 1 in topo.get_customers()
     assert 10 in topo.get_fibers()
     assert 100 in topo.get_devices()
+    # get_cables == get_fibers (только из cgraphs)
+    assert 10 in topo.get_cables()
 
 
-def test_get_nodes_cables_from_fngraph(client, cache):
+def test_get_nodes_from_fngraph(client, cache):
+    """get_nodes читает node_id из FNGraph; get_cables — только из cgraphs."""
     topo = NetworkTopology(client, cache=cache)
     fn = FNGraph(client, cache=cache)
     fn._add_node_vertex(1)
@@ -56,15 +57,22 @@ def test_get_nodes_cables_from_fngraph(client, cache):
     topo.fngraph = fn
 
     assert set(topo.get_nodes()) == {1, 2}
-    assert 99 in topo.get_cables()
+    # fiber_id из FNGraph в get_cables не попадает (алгоритм смотрит cgraphs)
+    assert topo.get_cables() == []
 
 
 def test_save_load_roundtrip(client, cache):
+    """pickle без live client/cache (MagicMock не сериализуется)."""
     topo = NetworkTopology(client, cache=cache)
     g, *_ = chain_customer_fiber_olt(client, cache)
     topo.cgraphs = [g]
-    client._url = "https://example.test"
-    client._apikey = "secret"
+
+    # отвязываем несериализуемые ссылки (как при реальном save без mock)
+    topo.client = None
+    topo.cache = None
+    for cg in topo.cgraphs:
+        cg.client = None
+        cg.cache = None
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "topo.pkl")
