@@ -12,12 +12,12 @@ from .models import PathReport, DATA_VERSION
 class MultiPathReport:
     branches: List[PathReport] = field(default_factory=list)
     wavelength_nm: int = 1550
+    dataversion: str = DATA_VERSION
     from_label: str = ""
     to_label: str = ""
     warnings: List[str] = field(default_factory=list)
     # Параметры поиска/расчёта текущих веток
     query: dict = field(default_factory=dict)
-    dataversion: str = DATA_VERSION
 
     @property
     def count(self) -> int:
@@ -85,9 +85,9 @@ class MultiPathReport:
         return cls(
             branches=branches,
             wavelength_nm=int(d.get("wavelength_nm") or 1550),
+            dataversion=str(d.get("dataversion") or DATA_VERSION),
             warnings=list(d.get("warnings") or []),
             query=dict(d.get("query") or {}),
-            dataversion=str(d.get("dataversion") or DATA_VERSION),
         )
 
     def to_table(self) -> str:
