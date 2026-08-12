@@ -17,6 +17,7 @@ from .calculator_build import AttenuationBuildMixin
 from .calculator_fn import AttenuationFNMixin
 from .calculator_fiber import AttenuationFiberMixin
 from .calculator_paths import AttenuationPathsMixin
+from .calculator_graph import AttenuationGraphMixin
 from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
@@ -48,6 +49,7 @@ class Attenuation(
     AttenuationEdgeMixin,
     AttenuationPathMixin,
     AttenuationPathsMixin,
+    AttenuationGraphMixin,
 ):
     def __init__(
         self,
