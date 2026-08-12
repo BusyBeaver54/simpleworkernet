@@ -137,12 +137,8 @@ class Attenuation(
         self.g = src
 
     def _cgraph_has_object(
-        self,
-        cg: Any,
-        obj_type: str,
-        obj_id: Union[int, str],
-        side: Optional[int] = None,
-        port: Optional[int] = None,
+        self, cg: Any, obj_type: str, obj_id: Union[int, str],
+        side: Optional[int] = None, port: Optional[int] = None,
     ) -> bool:
         if cg is None:
             return False
@@ -175,16 +171,10 @@ class Attenuation(
         return False
 
     def _select_cgraph_for_objects(
-        self,
-        obj1_type: str,
-        obj1_id: Union[int, str],
-        obj2_type: Optional[str] = None,
-        obj2_id: Optional[Union[int, str]] = None,
-        *,
-        obj1_side: Optional[int] = None,
-        obj1_port: Optional[int] = None,
-        obj2_side: Optional[int] = None,
-        obj2_port: Optional[int] = None,
+        self, obj1_type: str, obj1_id: Union[int, str],
+        obj2_type: Optional[str] = None, obj2_id: Optional[Union[int, str]] = None,
+        *, obj1_side: Optional[int] = None, obj1_port: Optional[int] = None,
+        obj2_side: Optional[int] = None, obj2_port: Optional[int] = None,
     ) -> None:
         graphs = list(self.cgraphs) if self.cgraphs else (
             [self.g] if self.g is not None else []
@@ -192,27 +182,20 @@ class Attenuation(
         if not graphs:
             self.g = None
             return
-
         if len(graphs) == 1:
             self.g = graphs[0]
             return
-
         has_obj2 = obj2_type is not None and obj2_id is not None and obj2_id != ""
-
         both: List[Any] = []
         only1: List[Any] = []
         for cg in graphs:
-            ok1 = self._cgraph_has_object(
-                cg, obj1_type, obj1_id, side=obj1_side, port=obj1_port,
-            )
+            ok1 = self._cgraph_has_object(cg, obj1_type, obj1_id, side=obj1_side, port=obj1_port)
             if not ok1:
                 ok1 = self._cgraph_has_object(cg, obj1_type, obj1_id)
             if not ok1:
                 continue
             if has_obj2:
-                ok2 = self._cgraph_has_object(
-                    cg, obj2_type, obj2_id, side=obj2_side, port=obj2_port,
-                )
+                ok2 = self._cgraph_has_object(cg, obj2_type, obj2_id, side=obj2_side, port=obj2_port)
                 if not ok2:
                     ok2 = self._cgraph_has_object(cg, obj2_type, obj2_id)
                 if ok2:
@@ -221,7 +204,6 @@ class Attenuation(
                     only1.append(cg)
             else:
                 only1.append(cg)
-
         if both:
             self.g = both[0]
             return
@@ -244,8 +226,9 @@ class Attenuation(
         obj2_port: Optional[int] = None,
         direction: Optional[str] = None,
         use_max: Optional[bool] = None,
-        max_paths: int = 50,
+        max_paths: Optional[int] = None,
     ):
+        """Расчёт затухания. max_paths=None — все пути/терминалы."""
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
@@ -253,23 +236,18 @@ class Attenuation(
             self.use_max = bool(use_max)
         try:
             has_obj1 = obj1_type is not None and obj1_id is not None and obj1_id != ""
-
             if not has_obj1:
-                return self._calculate_all_graphs(
-                    direction=direction, max_paths=max_paths,
-                )
+                return self._calculate_all_graphs(direction=direction, max_paths=max_paths)
 
             self._require_fiber_port(
                 obj1_type, obj1_id, obj1_port, obj2_type, obj2_id, obj2_port,
                 obj1_side=obj1_side, obj2_side=obj2_side,
             )
-
             self._select_cgraph_for_objects(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
                 obj2_side=obj2_side, obj2_port=obj2_port,
             )
-
             self._ensure_cgraph(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
@@ -289,15 +267,11 @@ class Attenuation(
                     f"нет пути между {obj1_type}:{obj1_id}"
                     + (f" и {obj2_type}:{obj2_id}" if obj2_type else "")
                 )
-
-            reports = [
-                self._report_from_vpath(p, direction=direction) for p in paths
-            ]
+            reports = [self._report_from_vpath(p, direction=direction) for p in paths]
             if len(reports) == 1:
                 return reports[0]
             return MultiPathReport(
-                branches=reports,
-                wavelength_nm=self.wavelength,
+                branches=reports, wavelength_nm=self.wavelength,
                 from_label=reports[0].from_label if reports else "",
                 to_label=reports[0].to_label if reports else "",
             )
@@ -305,10 +279,7 @@ class Attenuation(
             self.wavelength, self.use_max = prev_wl, prev_max
 
     def _calculate_all_graphs(
-        self,
-        *,
-        direction: Optional[str] = None,
-        max_paths: int = 50,
+        self, *, direction: Optional[str] = None, max_paths: Optional[int] = None,
     ):
         graphs = list(self.cgraphs) if self.cgraphs else (
             [self.g] if self.g is not None else []
@@ -319,21 +290,16 @@ class Attenuation(
                 "передайте cgraph=/topology= в Attenuation(...) или "
                 "obj1_type/obj1_id в calculate(...)"
             )
-
         if len(graphs) == 1:
             self.g = graphs[0]
-            return self._calculate_full_cgraph(
-                direction=direction, max_paths=max_paths,
-            )
+            return self._calculate_full_cgraph(direction=direction, max_paths=max_paths)
 
         branches: List[PathReport] = []
         errors: List[str] = []
         for i, cg in enumerate(graphs):
             self.g = cg
             try:
-                res = self._calculate_full_cgraph(
-                    direction=direction, max_paths=max_paths,
-                )
+                res = self._calculate_full_cgraph(direction=direction, max_paths=max_paths)
             except AttenuationError as e:
                 errors.append(f"cgraph[{i}]: {e}")
                 continue
@@ -350,18 +316,12 @@ class Attenuation(
         if len(branches) == 1:
             return branches[0]
         return MultiPathReport(
-            branches=branches,
-            wavelength_nm=self.wavelength,
-            from_label="",
-            to_label="",
-            warnings=errors,
+            branches=branches, wavelength_nm=self.wavelength,
+            from_label="", to_label="", warnings=errors,
         )
 
     def _calculate_full_cgraph(
-        self,
-        *,
-        direction: Optional[str] = None,
-        max_paths: int = 50,
+        self, *, direction: Optional[str] = None, max_paths: Optional[int] = None,
     ):
         """Затухания по всем значимым путям текущего CGraph."""
         if self.g is None or getattr(self.g, "vcount", lambda: 0)() == 0:
@@ -388,10 +348,7 @@ class Attenuation(
             )
 
         if not pair_sinks:
-            pair_sinks = [
-                v for v in self._leaf_vertices()
-                if v not in set(pair_sources)
-            ]
+            pair_sinks = [v for v in self._leaf_vertices() if v not in set(pair_sources)]
 
         collected: List[List[int]] = []
         seen = set()
@@ -406,18 +363,16 @@ class Attenuation(
                     if key not in seen:
                         seen.add(key)
                         collected.append(sp)
-                for p in self.all_simple_paths(
-                    s, t, cutoff=200, max_paths=max_paths,
-                ):
+                for p in self.all_simple_paths(s, t, cutoff=200, max_paths=max_paths):
                     if len(p) < 2:
                         continue
                     key = tuple(p)
                     if key not in seen:
                         seen.add(key)
                         collected.append(p)
-                    if len(collected) >= max_paths:
+                    if max_paths is not None and len(collected) >= max_paths:
                         break
-            if len(collected) >= max_paths:
+            if max_paths is not None and len(collected) >= max_paths:
                 break
 
         if not collected:
@@ -426,27 +381,19 @@ class Attenuation(
                 collected = [linear]
 
         if not collected:
-            raise AttenuationError(
-                "не удалось найти пути в CGraph для расчёта затуханий"
-            )
+            raise AttenuationError("не удалось найти пути в CGraph для расчёта затуханий")
 
-        # Убрать дубли путей customer→device с одним device_id (olt vs switch).
         collected = self._dedupe_paths_by_endpoints(collected)
-
-        reports = [
-            self._report_from_vpath(p, direction=direction) for p in collected
-        ]
+        reports = [self._report_from_vpath(p, direction=direction) for p in collected]
         if len(reports) == 1:
             return reports[0]
         return MultiPathReport(
-            branches=reports,
-            wavelength_nm=self.wavelength,
+            branches=reports, wavelength_nm=self.wavelength,
             from_label=reports[0].from_label if reports else "",
             to_label=reports[-1].to_label if reports else "",
         )
 
     def _dedupe_paths_by_endpoints(self, paths: List[List[int]]) -> List[List[int]]:
-        """Один путь на пару (customer_id, device_id); приоритет olt > switch."""
         from .calculator_paths import _DEVICE_TYPE_PRIORITY, _AUTO_TARGETS
         from ..constants import TYPE_CUSTOMER
 
@@ -470,7 +417,7 @@ class Attenuation(
                     dev_pri = min(dev_pri, _DEVICE_TYPE_PRIORITY.get(t, 99))
             return cust, dev, dev_pri
 
-        best = {}  # (cust, dev) -> (pri, path)
+        best = {}
         order = []
         for p in paths:
             cust, dev, pri = _ends(p)
@@ -500,7 +447,6 @@ class Attenuation(
         return out
 
     def _dedupe_device_vertices(self, indices: List[int]) -> List[int]:
-        """Один obj_id устройства — одна вершина (olt важнее switch)."""
         if self.g is None or not indices:
             return list(indices or [])
         from .calculator_paths import _DEVICE_TYPE_PRIORITY, _AUTO_TARGETS
