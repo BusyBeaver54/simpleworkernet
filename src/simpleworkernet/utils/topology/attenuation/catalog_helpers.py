@@ -139,7 +139,13 @@ def ports_from_ratio_key(ratio_key: Optional[str]) -> dict:
     if not ratio_key:
         return {}
     rd = load_ratio_defaults()
-    entry = rd.get(ratio_key) or {}
+    # алиасы: 1x2_equal → симметричный 50/50 (в defaults нет 1x2_equal)
+    aliases = {
+        "1x2_equal": "1x2_50/50",
+        "1x2": "1x2_50/50",
+    }
+    key = aliases.get(str(ratio_key).strip(), ratio_key)
+    entry = rd.get(key) or rd.get(ratio_key) or {}
     return dict(entry.get("ports") or {})
 
 
