@@ -10,6 +10,14 @@ _AUTO_TARGETS = frozenset({
     TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO,
 })
 
+# Приоритет типа устройства при дедупе одного obj_id (olt важнее switch).
+_DEVICE_TYPE_PRIORITY = {
+    TYPE_OLT: 0,
+    TYPE_ONU: 1,
+    TYPE_RADIO: 2,
+    TYPE_SWITCH: 3,
+}
+
 
 class AttenuationPathsMixin:
     def find_vertices(
@@ -103,6 +111,7 @@ class AttenuationPathsMixin:
         """Все простые пути между объектами (или от obj1 до авто-терминалов).
 
         Если obj2 не задан — ищем пути до OLT/switch/onu/radio в текущем CGraph.
+        Один device_id не дублируется как olt и switch (приоритет olt).
         """
         if self.g is None:
             raise AttenuationError("CGraph не задан")
@@ -173,15 +182,25 @@ class AttenuationPathsMixin:
         exclude_type: Optional[str] = None,
         exclude_id=None,
     ) -> List[int]:
+        """Терминалы OLT/switch/onu/radio.
+
+        Один физический device (один obj_id) не дублируется:
+        если есть и olt, и switch с одним id — берём olt.
+        """
         if self.g is None:
             return []
-        out: List[int] = []
         ex = str(exclude_id) if exclude_id is not None else None
+        # obj_id → (priority, vertex_index)
+        best = {}
         for v in self.g.vs:
             ot = v["obj_type"]
             if ot not in _AUTO_TARGETS:
                 continue
-            if exclude_type and ot == exclude_type and str(v["obj_id"]) == ex:
+            oid = str(v["obj_id"])
+            if exclude_type and ot == exclude_type and oid == ex:
                 continue
-            out.append(int(v.index))
-        return out
+            pri = _DEVICE_TYPE_PRIORITY.get(ot, 99)
+            prev = best.get(oid)
+            if prev is None or pri < prev[0]:
+                best[oid] = (pri, int(v.index))
+        return [idx for _, idx in sorted(best.values(), key=lambda x: x[1])]
