@@ -61,7 +61,27 @@ class BaseGraph:
     def get_shortest_paths(
         self, source: int, target: int, mode: str = "all"
     ) -> List[List[int]]:
-        return self._g.get_shortest_paths(source, to=target, mode=mode)
+        """Кратчайшие пути source→target.
+
+        Если target недостижим, igraph пишет RuntimeWarning
+        «Couldn't reach some vertices» — подавляем и возвращаем [].
+        """
+        import warnings
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Couldn't reach some vertices",
+                    category=RuntimeWarning,
+                )
+                paths = self._g.get_shortest_paths(source, to=target, mode=mode)
+        except Exception:
+            return []
+        out: List[List[int]] = []
+        for pth in paths or []:
+            if pth:
+                out.append([int(x) for x in pth])
+        return out
 
     def write_graphml(self, filename: str) -> None:
         self._g.write_graphml(filename)

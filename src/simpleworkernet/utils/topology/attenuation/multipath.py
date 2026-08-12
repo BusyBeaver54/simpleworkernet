@@ -39,6 +39,83 @@ class MultiPathReport:
         """Среднее расчётное по ветвям."""
         return self.total_db_avg
 
+    # --- экстремумы по ветвям (значение + индекс в branches, 0-based) ---
+
+    def _argmin(self, values) -> Optional[int]:
+        if not values:
+            return None
+        best_i, best_v = 0, values[0]
+        for i, v in enumerate(values):
+            if v < best_v:
+                best_i, best_v = i, v
+        return best_i
+
+    def _argmax(self, values) -> Optional[int]:
+        if not values:
+            return None
+        best_i, best_v = 0, values[0]
+        for i, v in enumerate(values):
+            if v > best_v:
+                best_i, best_v = i, v
+        return best_i
+
+    @property
+    def total_db_min_branch(self) -> Optional[int]:
+        """Индекс ветки с минимальным total_db (calc)."""
+        return self._argmin([b.total_db for b in self.branches])
+
+    @property
+    def total_db_max_branch(self) -> Optional[int]:
+        """Индекс ветки с максимальным total_db (calc)."""
+        return self._argmax([b.total_db for b in self.branches])
+
+    @property
+    def fiber_length_min_m(self) -> float:
+        if not self.branches:
+            return 0.0
+        return min(b.fiber_length_m for b in self.branches)
+
+    @property
+    def fiber_length_max_m(self) -> float:
+        if not self.branches:
+            return 0.0
+        return max(b.fiber_length_m for b in self.branches)
+
+    @property
+    def fiber_length_min_branch(self) -> Optional[int]:
+        """Индекс ветки с минимальной длиной волокна."""
+        return self._argmin([b.fiber_length_m for b in self.branches])
+
+    @property
+    def fiber_length_max_branch(self) -> Optional[int]:
+        """Индекс ветки с максимальной длиной волокна."""
+        return self._argmax([b.fiber_length_m for b in self.branches])
+
+    def summary(self) -> dict:
+        """Сводка min/max по затуханию и длине волокна + позиции веток."""
+        def _val_at(idx, getter, nd=4):
+            if idx is None or not self.branches:
+                return None
+            v = getter(self.branches[idx])
+            return round(float(v), nd)
+
+        db_min_i = self.total_db_min_branch
+        db_max_i = self.total_db_max_branch
+        fl_min_i = self.fiber_length_min_branch
+        fl_max_i = self.fiber_length_max_branch
+        return {
+            "count": self.count,
+            "total_db_avg": round(self.total_db_avg, 4),
+            "total_db_min": _val_at(db_min_i, lambda b: b.total_db),
+            "total_db_min_branch": db_min_i,
+            "total_db_max": _val_at(db_max_i, lambda b: b.total_db),
+            "total_db_max_branch": db_max_i,
+            "fiber_length_min_m": _val_at(fl_min_i, lambda b: b.fiber_length_m, 2),
+            "fiber_length_min_branch": fl_min_i,
+            "fiber_length_max_m": _val_at(fl_max_i, lambda b: b.fiber_length_m, 2),
+            "fiber_length_max_branch": fl_max_i,
+        }
+
     def branch_for(self, obj_type: str, obj_id) -> Optional[PathReport]:
         key = f"{obj_type}:{obj_id}"
         for b in self.branches:
@@ -65,6 +142,13 @@ class MultiPathReport:
             "total_db_min": round(self.total_db_min, 4),
             "total_db_max": round(self.total_db_max, 4),
             "total_db_avg": round(self.total_db_avg, 4),
+            "fiber_length_min_m": round(self.fiber_length_min_m, 2),
+            "fiber_length_max_m": round(self.fiber_length_max_m, 2),
+            "total_db_min_branch": self.total_db_min_branch,
+            "total_db_max_branch": self.total_db_max_branch,
+            "fiber_length_min_branch": self.fiber_length_min_branch,
+            "fiber_length_max_branch": self.fiber_length_max_branch,
+            "summary": self.summary(),
             "branches": [b.to_dict() for b in self.branches],
             "warnings": self.warnings,
         }
@@ -79,10 +163,23 @@ class MultiPathReport:
         )
 
     def to_table(self) -> str:
+        s = self.summary()
+        db_min_i = s.get("total_db_min_branch")
+        db_max_i = s.get("total_db_max_branch")
+        fl_min_i = s.get("fiber_length_min_branch")
+        fl_max_i = s.get("fiber_length_max_branch")
         lines = [
             f"MultiPath  λ={self.wavelength_nm} nm  branches={self.count}  "
             f"calc(avg)={self.total_db_avg:.3f}  "
             f"min={self.total_db_min:.3f}  max={self.total_db_max:.3f} dB",
+            (
+                f"  atten: min={s.get('total_db_min')} dB @branch[{db_min_i}]  "
+                f"max={s.get('total_db_max')} dB @branch[{db_max_i}]"
+            ),
+            (
+                f"  fiber: min={s.get('fiber_length_min_m')} m @branch[{fl_min_i}]  "
+                f"max={s.get('fiber_length_max_m')} m @branch[{fl_max_i}]"
+            ),
             "=" * 72,
         ]
         for i, b in enumerate(self.branches, 1):
