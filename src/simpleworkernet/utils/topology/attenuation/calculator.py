@@ -60,21 +60,6 @@ class Attenuation(
         client: Any = None,
         use_max: bool = False,
     ) -> None:
-        """Инициализация расчёта затуханий.
-
-        Параметры источника графа (любой из вариантов):
-
-        * ``cgraph`` — один CGraph, список CGraph **или** NetworkTopology
-        * ``topology`` — явно NetworkTopology (приоритет, если задан оба)
-
-        Примеры::
-
-            Attenuation(cgraph=cg)
-            Attenuation(cgraph=[cg1, cg2])
-            Attenuation(topology=nt)
-            Attenuation(cgraph=nt)
-            Attenuation(client=client)
-        """
         self.topology: Any = None
         self.cgraphs: List[Any] = []
         self.g: Any = None
@@ -261,15 +246,6 @@ class Attenuation(
         use_max: Optional[bool] = None,
         max_paths: int = 50,
     ):
-        """Расчёт затухания.
-
-        1. ``calculate(obj1_type, obj1_id, ...)`` — путь между объектами.
-           При нескольких CGraph выбирается граф, где есть объекты.
-
-        2. ``calculate()`` — по всему CGraph / **всем** cgraph топологии.
-
-        3. без графа и без obj1 → ``AttenuationError``.
-        """
         prev_wl, prev_max = self.wavelength, self.use_max
         if wavelength is not None:
             self.wavelength = int(wavelength)
@@ -392,7 +368,7 @@ class Attenuation(
             raise AttenuationError("CGraph пуст — нечего считать")
 
         sources = self._vertices_of_types(_SOURCE_TYPES)
-        sinks = self._vertices_of_types(_SINK_TYPES)
+        sinks = self._dedupe_device_vertices(self._vertices_of_types(_SINK_TYPES))
         customers = self._vertices_of_types({TYPE_CUSTOMER})
 
         pair_sources = customers if customers else sources
@@ -454,6 +430,9 @@ class Attenuation(
                 "не удалось найти пути в CGraph для расчёта затуханий"
             )
 
+        # Убрать дубли путей customer→device с одним device_id (olt vs switch).
+        collected = self._dedupe_paths_by_endpoints(collected)
+
         reports = [
             self._report_from_vpath(p, direction=direction) for p in collected
         ]
@@ -465,6 +444,82 @@ class Attenuation(
             from_label=reports[0].from_label if reports else "",
             to_label=reports[-1].to_label if reports else "",
         )
+
+    def _dedupe_paths_by_endpoints(self, paths: List[List[int]]) -> List[List[int]]:
+        """Один путь на пару (customer_id, device_id); приоритет olt > switch."""
+        from .calculator_paths import _DEVICE_TYPE_PRIORITY, _AUTO_TARGETS
+        from ..constants import TYPE_CUSTOMER
+
+        def _ends(path):
+            if not path or self.g is None:
+                return None, None, 99
+            try:
+                a = self.g.vs[path[0]]
+                b = self.g.vs[path[-1]]
+            except Exception:
+                return None, None, 99
+            ta, tb = a["obj_type"], b["obj_type"]
+            ida, idb = str(a["obj_id"]), str(b["obj_id"])
+            cust = dev = None
+            dev_pri = 99
+            for t, i in ((ta, ida), (tb, idb)):
+                if t == TYPE_CUSTOMER:
+                    cust = i
+                elif t in _AUTO_TARGETS:
+                    dev = i
+                    dev_pri = min(dev_pri, _DEVICE_TYPE_PRIORITY.get(t, 99))
+            return cust, dev, dev_pri
+
+        best = {}  # (cust, dev) -> (pri, path)
+        order = []
+        for p in paths:
+            cust, dev, pri = _ends(p)
+            key = (cust, dev)
+            if key == (None, None):
+                order.append((len(order), p))
+                continue
+            prev = best.get(key)
+            if prev is None or pri < prev[0]:
+                best[key] = (pri, p)
+        out = [p for _, p in order]
+        seen_keys = set()
+        for p in paths:
+            cust, dev, pri = _ends(p)
+            key = (cust, dev)
+            if key == (None, None):
+                continue
+            if key in seen_keys:
+                continue
+            chosen = best.get(key)
+            if chosen and chosen[1] is p:
+                out.append(p)
+                seen_keys.add(key)
+            elif chosen and key not in seen_keys:
+                out.append(chosen[1])
+                seen_keys.add(key)
+        return out
+
+    def _dedupe_device_vertices(self, indices: List[int]) -> List[int]:
+        """Один obj_id устройства — одна вершина (olt важнее switch)."""
+        if self.g is None or not indices:
+            return list(indices or [])
+        from .calculator_paths import _DEVICE_TYPE_PRIORITY, _AUTO_TARGETS
+        best = {}
+        for idx in indices:
+            try:
+                v = self.g.vs[idx]
+                ot = v["obj_type"]
+                oid = str(v["obj_id"])
+            except Exception:
+                continue
+            if ot not in _AUTO_TARGETS:
+                best[f"_raw:{idx}"] = (99, idx)
+                continue
+            pri = _DEVICE_TYPE_PRIORITY.get(ot, 99)
+            prev = best.get(oid)
+            if prev is None or pri < prev[0]:
+                best[oid] = (pri, idx)
+        return [idx for _, idx in sorted(best.values(), key=lambda x: x[1])]
 
     def _vertices_of_types(self, types) -> List[int]:
         if self.g is None:
