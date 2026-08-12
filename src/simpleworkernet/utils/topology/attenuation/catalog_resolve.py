@@ -1,5 +1,5 @@
 # simpleworkernet/utils/topology/attenuation/catalog_resolve.py
-"""splitter_port_db: force → inventory → instance → name → catalog → ratio → estimated."""
+"""splitter_port_db: force → name → instance → catalog → ratio → estimated."""
 from __future__ import annotations
 import math
 import re
@@ -88,7 +88,7 @@ class CatalogResolveMixin:
             catalog_name=catalog_name, ratio_key=ratio_key,
             topology_type=topology_type, port=port, port_name=port_name,
             port_count_out=port_count_out, wavelength_nm=wavelength_nm,
-            prefer_name=prefer_name, inventory_id=inventory_id,
+            prefer_name=prefer_name,
         )
         mn, calc, mx, source, pn = triple
         db = _select_mode(mn, calc, mx, use_max=use_max, use_min=use_min)
@@ -114,19 +114,15 @@ class CatalogResolveMixin:
 
         inst = None
         match_kind = None
-        # 1) inventory_id → JSON-каталог (основной путь)
-        if inventory_id is not None:
-            inst = self._find_splitter(inventory_id=inventory_id)
+        # force → name → instance → catalog_id → ratio → estimated
+        if prefer_name and catalog_name:
+            inst = self._find_splitter(catalog_name=catalog_name)
             if inst is not None:
-                match_kind = "inventory"
+                match_kind = "name"
         if inst is None and splitter_id is not None:
             inst = self._find_splitter(splitter_id=splitter_id)
             if inst is not None:
                 match_kind = "instance"
-        if inst is None and prefer_name and catalog_name:
-            inst = self._find_splitter(catalog_name=catalog_name)
-            if inst is not None:
-                match_kind = "name"
         if inst is None and catalog_name:
             inst = self._find_splitter(catalog_name=catalog_name)
             if inst is not None:
