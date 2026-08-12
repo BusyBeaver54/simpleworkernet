@@ -1,5 +1,5 @@
 # simpleworkernet/utils/topology/attenuation/catalog_resolve.py
-"""splitter_port_db: force → name → instance → catalog → ratio → estimated."""
+"""splitter_port_db: force → inventory → instance → name → catalog → ratio → estimated."""
 from __future__ import annotations
 import math
 import re
@@ -81,13 +81,14 @@ class CatalogResolveMixin:
         splitter_id=None, catalog_id=None, catalog_name=None, ratio_key=None,
         topology_type=None, port=None, port_name=None, port_count_out=0,
         wavelength_nm=1550, use_max=False, use_min=False, prefer_name: bool = True,
+        inventory_id=None,
     ) -> Tuple[float, str, Optional[str]]:
         triple = self.splitter_port_db_triple(
             splitter_id=splitter_id, catalog_id=catalog_id,
             catalog_name=catalog_name, ratio_key=ratio_key,
             topology_type=topology_type, port=port, port_name=port_name,
             port_count_out=port_count_out, wavelength_nm=wavelength_nm,
-            prefer_name=prefer_name,
+            prefer_name=prefer_name, inventory_id=inventory_id,
         )
         mn, calc, mx, source, pn = triple
         db = _select_mode(mn, calc, mx, use_max=use_max, use_min=use_min)
@@ -98,6 +99,7 @@ class CatalogResolveMixin:
         splitter_id=None, catalog_id=None, catalog_name=None, ratio_key=None,
         topology_type=None, port=None, port_name=None, port_count_out=0,
         wavelength_nm=1550, prefer_name: bool = True,
+        inventory_id=None,
     ) -> Tuple[float, float, float, str, Optional[str]]:
         if splitter_id is not None:
             forced = self._data.get("force", {}).get("splitters", {}).get(str(splitter_id))
@@ -112,14 +114,19 @@ class CatalogResolveMixin:
 
         inst = None
         match_kind = None
-        if prefer_name and catalog_name:
-            inst = self._find_splitter(catalog_name=catalog_name)
+        # 1) inventory_id → JSON-каталог (основной путь)
+        if inventory_id is not None:
+            inst = self._find_splitter(inventory_id=inventory_id)
             if inst is not None:
-                match_kind = "name"
+                match_kind = "inventory"
         if inst is None and splitter_id is not None:
             inst = self._find_splitter(splitter_id=splitter_id)
             if inst is not None:
                 match_kind = "instance"
+        if inst is None and prefer_name and catalog_name:
+            inst = self._find_splitter(catalog_name=catalog_name)
+            if inst is not None:
+                match_kind = "name"
         if inst is None and catalog_name:
             inst = self._find_splitter(catalog_name=catalog_name)
             if inst is not None:
@@ -134,7 +141,7 @@ class CatalogResolveMixin:
             if not ports:
                 rk = inst.get("ratio") or ratio_key
                 if not rk and inst.get("name"):
-                    rk = guess_ratio_key(str(inst["name"]))
+                    rk = guess_ratio_key(str(inst["name"])
                 if not rk and catalog_name:
                     rk = guess_ratio_key(str(catalog_name))
                 if rk:
