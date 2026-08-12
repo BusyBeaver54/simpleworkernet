@@ -51,23 +51,33 @@ class Attenuation(
 ):
     def __init__(
         self,
-        cgraph: Any = None,
+        graph: Any = None,
         *,
-        topology: Any = None,
         catalog: Optional[AttenuationCatalog] = None,
         wavelength: int = 1550,
         cache: Any = None,
         client: Any = None,
-        use_max: bool = False,
+        # устаревшие алиасы (graph предпочтителен)
+        cgraph: Any = None,
+        topology: Any = None,
     ) -> None:
+        """graph — CGraph или NetworkTopology (единственный входной граф).
+
+        cgraph=/topology= оставлены как алиасы graph= для совместимости.
+        """
         self.topology: Any = None
         self.cgraphs: List[Any] = []
         self.g: Any = None
 
         self.wavelength = int(wavelength)
-        self.use_max = bool(use_max)
+        # min/max/avg считаются всегда; use_max больше не используется
+        self.use_max = False
 
-        self._bind_graphs(cgraph=cgraph, topology=topology)
+        src = graph if graph is not None else (topology if topology is not None else cgraph)
+        self._bind_graphs(
+            cgraph=None if _is_network_topology(src) else src,
+            topology=src if _is_network_topology(src) else None,
+        )
 
         if client is not None:
             self.client = client
@@ -225,15 +235,22 @@ class Attenuation(
         obj2_side: Optional[int] = None,
         obj2_port: Optional[int] = None,
         direction: Optional[str] = None,
-        use_max: Optional[bool] = None,
         max_paths: Optional[int] = None,
     ):
-        """Расчёт затухания. Всегда MultiPathReport. max_paths=None — все пути."""
-        prev_wl, prev_max = self.wavelength, self.use_max
+        """Расчёт затухания. Всегда MultiPathReport.
+
+        direction:
+          * ``"upstream"`` — от OLT/device к абоненту
+          * ``"downstream"`` — от абонента к OLT/device
+          * ``None`` / ``"unknown"`` — как найден путь (от first object)
+
+        max_paths=None — все терминалы; для full_cgraph берётся кратчайший путь
+        (уникальный в дереве PON). all_simple_paths — только при between_objects
+        и max_paths>1.
+        """
+        prev_wl = self.wavelength
         if wavelength is not None:
             self.wavelength = int(wavelength)
-        if use_max is not None:
-            self.use_max = bool(use_max)
         try:
             has_obj1 = obj1_type is not None and obj1_id is not None and obj1_id != ""
             if not has_obj1:
@@ -285,12 +302,11 @@ class Attenuation(
                     "obj2_port": obj2_port,
                     "direction": direction,
                     "wavelength_nm": self.wavelength,
-                    "use_max": self.use_max,
                     "max_paths": max_paths,
                 },
             )
         finally:
-            self.wavelength, self.use_max = prev_wl, prev_max
+            self.wavelength = prev_wl
 
     def _calculate_all_graphs(
         self, *, direction: Optional[str] = None, max_paths: Optional[int] = None,
@@ -301,7 +317,7 @@ class Attenuation(
         if not graphs:
             raise AttenuationError(
                 "не указаны объекты для расчёта и CGraph не задан: "
-                "передайте cgraph=/topology= в Attenuation(...) или "
+                "передайте graph= (CGraph/NetworkTopology) в Attenuation(...) или "
                 "obj1_type/obj1_id в calculate(...)"
             )
         if len(graphs) == 1:
@@ -338,7 +354,6 @@ class Attenuation(
                 "cgraph_count": len(graphs),
                 "direction": direction,
                 "wavelength_nm": self.wavelength,
-                "use_max": self.use_max,
                 "max_paths": max_paths,
             },
         )
@@ -373,6 +388,8 @@ class Attenuation(
         if not pair_sinks:
             pair_sinks = [v for v in self._leaf_vertices() if v not in set(pair_sources)]
 
+        # Только кратчайшие пути: в PON-дереве путь customer↔OLT уникален;
+        # all_simple_paths даёт экспоненциальную стоимость без выигрыша.
         collected: List[List[int]] = []
         seen = set()
         for s in pair_sources:
@@ -386,15 +403,8 @@ class Attenuation(
                     if key not in seen:
                         seen.add(key)
                         collected.append(sp)
-                for p in self.all_simple_paths(s, t, cutoff=200, max_paths=max_paths):
-                    if len(p) < 2:
-                        continue
-                    key = tuple(p)
-                    if key not in seen:
-                        seen.add(key)
-                        collected.append(p)
-                    if max_paths is not None and len(collected) >= max_paths:
-                        break
+                if max_paths is not None and len(collected) >= max_paths:
+                    break
             if max_paths is not None and len(collected) >= max_paths:
                 break
 
@@ -417,7 +427,6 @@ class Attenuation(
                 "mode": "full_cgraph",
                 "direction": direction,
                 "wavelength_nm": self.wavelength,
-                "use_max": self.use_max,
                 "max_paths": max_paths,
                 "path_count": len(reports),
             },
