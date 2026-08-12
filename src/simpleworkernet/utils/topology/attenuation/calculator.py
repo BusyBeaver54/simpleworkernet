@@ -8,7 +8,6 @@ from ..constants import (
     TERMINAL_TYPES,
 )
 from .catalog import AttenuationCatalog
-from . import splitter_load
 from .models import PathReport
 from .multipath import MultiPathReport
 from .calculator_segments import AttenuationSegmentsMixin, _label_vertex
@@ -194,12 +193,6 @@ class Attenuation(
             if self.g is not None and self.g not in self.cgraphs:
                 self.cgraphs.append(self.g)
 
-            # preload сплиттеров текущего графа (один раз)
-            try:
-                splitter_load.preload_splitters_from_graph(self)
-            except Exception:
-                pass
-
             paths = self.find_paths(
                 obj1_type, obj1_id, obj2_type, obj2_id,
                 obj1_side=obj1_side, obj1_port=obj1_port,
@@ -290,12 +283,6 @@ class Attenuation(
         """Затухания по всем значимым путям текущего CGraph."""
         if self.g is None or getattr(self.g, "vcount", lambda: 0)() == 0:
             raise AttenuationError("CGraph пуст — нечего считать")
-
-        # один проход: все уникальные splitter id → cache/API (без N+1 на сегментах)
-        try:
-            splitter_load.preload_splitters_from_graph(self)
-        except Exception:
-            pass
 
         sources = self._vertices_of_types(_SOURCE_TYPES)
         sinks = self._dedupe_device_vertices(self._vertices_of_types(_SINK_TYPES))
