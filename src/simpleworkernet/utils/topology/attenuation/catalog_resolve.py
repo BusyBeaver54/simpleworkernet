@@ -10,16 +10,22 @@ from .catalog_helpers import (
 
 
 def _topology_to_ratio_key(topology_type):
+    """topology '1xN' → ключ ratio_defaults.
+
+    Для 1x2 в defaults нет 1x2_equal, есть 1x2_50/50 (симметричный).
+    Для N>=3 — 1xN_equal.
+    """
     if not topology_type:
         return None
     s = str(topology_type).strip().lower().replace(" ", "")
     m = re.match(r"^(\d+)x(\d+)$", s)
     if m:
         a, b = int(m.group(1)), int(m.group(2))
-        if a == 1 and b >= 2:
-            return f"1x{b}_equal"
-        if b == 1 and a >= 2:
-            return f"1x{a}_equal"
+        n = b if a == 1 else (a if b == 1 else max(a, b))
+        if n == 2:
+            return "1x2_50/50"
+        if n >= 3:
+            return f"1x{n}_equal"
     return guess_ratio_key(str(topology_type)) or None
 
 
