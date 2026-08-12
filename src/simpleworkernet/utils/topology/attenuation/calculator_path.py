@@ -15,15 +15,6 @@ from .calculator_segments import (
 
 class AttenuationPathMixin:
     def _fiber_core_info(self, fiber_vertex_attrs: dict) -> dict:
-        """Номер ОВ, id волокна, цвет и модуль для сегмента/endpoint fiber.
-
-        В графе port вершины fiber — clps_mid из коммутации (часто номер ОВ,
-        иногда id волокна). Нормализуем:
-          port      → номер ОВ (number)
-          port_name → fiber_color (Fiber.Get_list.fibers.color.name)
-          meta      → fiber_core_id, module_number, fiber_number,
-                      fiber_color, module_color, mf_path (m1f5)
-        """
         raw_port = fiber_vertex_attrs.get("port")
         try:
             raw_port_i = int(raw_port) if raw_port is not None else None
@@ -428,8 +419,10 @@ class AttenuationPathMixin:
         elif port_name is None and obj is not None and port_i is not None:
             port_name = self._device_port_name(obj, port_i)
         commutation_index = None
+        login = None
         if ot == TYPE_CUSTOMER:
             commutation_index = self._customer_commutation_index(va, port_i)
+            login = self._customer_login(obj)
         meta = {}
         if ot == TYPE_FIBER:
             cn = _cable_name(va)
@@ -461,6 +454,7 @@ class AttenuationPathMixin:
             port_name=str(port_name) if port_name else None,
             host=str(host) if host else None,
             commutation_index=commutation_index,
+            login=str(login) if login else None,
             label=_label_vertex(va), meta=meta,
         )
 
@@ -548,14 +542,20 @@ class AttenuationPathMixin:
                 pass
         return port
 
+    def _customer_login(self, obj: Any) -> Optional[str]:
+        """Номер договора: Customer.login."""
+        if obj is None:
+            return None
+        for key in ("login", "Login", "dognumber", "agreement_number", "contract"):
+            val = getattr(obj, key, None) if not isinstance(obj, dict) else obj.get(key)
+            if val is not None and val != "":
+                return str(val).strip() or None
+        return None
+
     def _dedupe_cross_adapters(
         self, segs: List[AttenuationSegment],
     ) -> List[AttenuationSegment]:
-        """Оставить ровно один adapter на cross_id (первый по пути).
-
-        Через кросс: два коннектора (пришёл/ушёл) + internal — физически
-        один адаптер. through/internal/through не суммируем.
-        """
+        """Оставить ровно один adapter на cross_id (первый по пути)."""
         seen: set = set()
         out: List[AttenuationSegment] = []
         for s in segs:
@@ -570,20 +570,26 @@ class AttenuationPathMixin:
     def _assign_cumulative(
         self, segs: List[AttenuationSegment],
     ) -> None:
-        """Накопительная сумма от корня пути (начало = 0 dB).
+        """Накопительные Σ затухания и длины волокна от корня пути.
 
-        После каждого сегмента-ребра: Σ = Σ_prev + db сегмента.
-        Для нелинейного CGraph каждая ветвь (PathReport) считается
-        от своего корня независимо.
+        Начало пути = 0 dB / 0 m. После каждого сегмента:
+          Σdb += db,  LΣ += length_m (только kind=fiber).
         """
         cum = cum_min = cum_max = 0.0
+        flen = 0.0
         for s in segs:
             cum += float(s.db or 0.0)
             cum_min += float(s.db_min if s.db_min is not None else s.db or 0.0)
             cum_max += float(s.db_max if s.db_max is not None else s.db or 0.0)
+            if s.kind == "fiber" and s.length_m is not None:
+                try:
+                    flen += float(s.length_m)
+                except (TypeError, ValueError):
+                    pass
             s.db_cumulative = cum
             s.db_cumulative_min = cum_min
             s.db_cumulative_max = cum_max
+            s.fiber_length_cumulative_m = flen
 
     def _report_from_vpath(
         self, vpath: List[int], *, direction: Optional[str] = None,
@@ -592,16 +598,13 @@ class AttenuationPathMixin:
             direction = self._direction_of_path(vpath)
         segs: List[AttenuationSegment] = []
         endpoints = {vpath[0], vpath[-1]} if len(vpath) >= 1 else set()
-        # Один adapter на кросс за весь путь (не на каждый стык пришёл/ушёл).
         cross_adapter_seen: set = set()
         for a, b in zip(vpath, vpath[1:]):
             segs.extend(self._edge_segments(
                 a, b, direction=direction, path_endpoints=endpoints,
                 cross_adapter_seen=cross_adapter_seen,
             ))
-        # Страховка: дедуп adapter, если edge-логика пропустила дубликат.
         segs = self._dedupe_cross_adapters(segs)
-        # Накопительная сумма от корня (вершина 0 → 0 dB).
         self._assign_cumulative(segs)
         total = sum(s.db for s in segs)
         total_min = sum((s.db_min if s.db_min is not None else s.db) for s in segs)
