@@ -8,6 +8,7 @@ from ..constants import (
     TERMINAL_TYPES,
 )
 from .catalog import AttenuationCatalog
+from . import splitter_load
 from .models import PathReport
 from .multipath import MultiPathReport
 from .calculator_segments import AttenuationSegmentsMixin, _label_vertex
@@ -161,13 +162,7 @@ class Attenuation(
         direction: Optional[str] = None,
         max_paths: Optional[int] = None,
     ):
-        """Расчёт затухания. Всегда MultiPathReport.
-
-        direction:
-          * ``\"upstream\"`` — от OLT/device к абоненту
-          * ``\"downstream\"`` — от абонента к OLT/device
-          * ``None`` / ``\"unknown\"`` — как найден путь
-        """
+        """Расчёт затухания. Всегда MultiPathReport."""
         prev_wl = self.wavelength
         if wavelength is not None:
             self.wavelength = int(wavelength)
@@ -284,6 +279,11 @@ class Attenuation(
         if self.g is None or getattr(self.g, "vcount", lambda: 0)() == 0:
             raise AttenuationError("CGraph пуст — нечего считать")
 
+        try:
+            splitter_load.preload_splitters_from_graph(self)
+        except Exception:
+            pass
+
         sources = self._vertices_of_types(_SOURCE_TYPES)
         sinks = self._dedupe_device_vertices(self._vertices_of_types(_SINK_TYPES))
         customers = self._vertices_of_types({TYPE_CUSTOMER})
@@ -307,7 +307,6 @@ class Attenuation(
         if not pair_sinks:
             pair_sinks = [v for v in self._leaf_vertices() if v not in set(pair_sources)]
 
-        # Батч: один get_shortest_paths(source, to=targets) на source.
         collected: List[List[int]] = []
         seen = set()
         for s in pair_sources:
