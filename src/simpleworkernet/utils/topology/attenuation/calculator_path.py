@@ -52,24 +52,7 @@ class AttenuationPathMixin(AttenuationPathFiberMixin):
         side = int(splitter_vertex_attrs.get("side") or edge_side or 0)
         port = int(splitter_vertex_attrs.get("port") or 0)
         splitter_obj = splitter_vertex_attrs.get("api_obj")
-        # inventory_id → JSON-каталог; catalog_id/name — оттуда же
-        inventory_id = splitter_vertex_attrs.get("inventory_id")
-        if inventory_id is None and splitter_obj is not None:
-            inventory_id = (
-                splitter_obj.get("inventory_id") if isinstance(splitter_obj, dict)
-                else getattr(splitter_obj, "inventory_id", None)
-            )
-        catalog_id = splitter_vertex_attrs.get("catalog_id")
-        if catalog_id is None:
-            catalog_id = self._splitter_catalog_id(splitter_obj)
-        if inventory_id is not None and hasattr(self.catalog, "_find_splitter"):
-            entry = self.catalog._find_splitter(inventory_id=inventory_id)
-            if entry:
-                if not splitter_vertex_attrs.get("obj_name") and entry.get("name"):
-                    splitter_vertex_attrs = dict(splitter_vertex_attrs)
-                    splitter_vertex_attrs["obj_name"] = entry["name"]
-                if catalog_id is None and entry.get("catalog_id") is not None:
-                    catalog_id = entry.get("catalog_id")
+        catalog_id = self._splitter_catalog_id(splitter_obj)
         pout = None
         if splitter_obj is not None:
             pout = (
@@ -103,7 +86,6 @@ class AttenuationPathMixin(AttenuationPathFiberMixin):
                 ratio_key=ratio_key, topology_type=topology,
                 port=port if port else None, port_name=port_name,
                 port_count_out=pout or 0, wavelength_nm=self.wavelength, prefer_name=True,
-                inventory_id=inventory_id,
             )
         else:
             result = self.catalog.splitter_port_db(
@@ -112,7 +94,6 @@ class AttenuationPathMixin(AttenuationPathFiberMixin):
                 port=port if port else None, port_name=port_name,
                 port_count_out=pout or 0, wavelength_nm=self.wavelength,
                 use_max=self.use_max, prefer_name=True,
-                inventory_id=inventory_id,
             )
             db, source = result[0], result[1]
             cat_port_name = result[2] if len(result) > 2 else None
@@ -135,7 +116,7 @@ class AttenuationPathMixin(AttenuationPathFiberMixin):
             port_name=str(port_name) if port_name else None,
             side=side, wavelength_nm=self.wavelength, source=source,
             meta={
-                "catalog_id": catalog_id, "inventory_id": inventory_id,
+                "catalog_id": catalog_id,
                 "topology": topology,
                 "direction": direction, "ratio_key": ratio_key,
                 "in_side": _SPLITTER_IN_SIDE, "out_side": _SPLITTER_OUT_SIDE,
