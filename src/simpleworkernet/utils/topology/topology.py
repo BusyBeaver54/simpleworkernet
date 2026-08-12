@@ -57,6 +57,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         """Добавить CGraph. Несвязный → разбить на связные компоненты.
 
         Каждый порт OLT — своё дерево; не смешиваем в одном CGraph.
+        Warning оставляем для отладки.
         """
         if cgraph is None or cgraph.vcount() == 0:
             return
@@ -70,7 +71,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                 cgraph.vcount(), cgraph.ecount(),
             )
             return
-        self.logger.info(
+        self.logger.warning(
             "CGraph не связный (v=%s e=%s) → %s связных компонент",
             cgraph.vcount(), cgraph.ecount(), len(parts),
         )
