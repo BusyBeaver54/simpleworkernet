@@ -8,6 +8,9 @@ from typing import List, Optional, Union
 
 from ..constants import TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER
 
+# Версия схемы PathReport/MultiPathReport (для сравнения при load)
+DATA_VERSION = "3.1"
+
 _DEVICE_EP = frozenset({TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO})
 
 
@@ -166,6 +169,7 @@ class PathReport:
     total_db_min: float = 0.0
     total_db_max: float = 0.0
     wavelength_nm: int = 1550
+    dataversion: str = DATA_VERSION
     segments: List[AttenuationSegment] = field(default_factory=list)
     vertex_path: List[int] = field(default_factory=list)
     direction: str = ""
@@ -279,6 +283,7 @@ class PathReport:
         device, customer = self._pick_device_customer()
         return {
             "schema": "simpleworkernet.attenuation.PathReport/v3",
+            "dataversion": self.dataversion or DATA_VERSION,
             "total_db": round(self.total_db, 4),
             "total_db_min": round(self.total_db_min, 4),
             "total_db_max": round(self.total_db_max, 4),
@@ -308,6 +313,7 @@ class PathReport:
             total_db_min=float(d["total_db_min"]) if d.get("total_db_min") is not None else total,
             total_db_max=float(d["total_db_max"]) if d.get("total_db_max") is not None else total,
             wavelength_nm=int(d.get("wavelength_nm") or 1550),
+            dataversion=str(d.get("dataversion") or DATA_VERSION),
             segments=segs,
             vertex_path=list(d.get("vertex_path") or []),
             direction=str(d.get("direction") or ""),
