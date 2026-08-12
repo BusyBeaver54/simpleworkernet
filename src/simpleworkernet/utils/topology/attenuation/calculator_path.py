@@ -548,6 +548,43 @@ class AttenuationPathMixin:
                 pass
         return port
 
+    def _dedupe_cross_adapters(
+        self, segs: List[AttenuationSegment],
+    ) -> List[AttenuationSegment]:
+        """Оставить ровно один adapter на cross_id (первый по пути).
+
+        Через кросс: два коннектора (пришёл/ушёл) + internal — физически
+        один адаптер. through/internal/through не суммируем.
+        """
+        seen: set = set()
+        out: List[AttenuationSegment] = []
+        for s in segs:
+            if s.kind == "adapter" and s.obj_id:
+                cid = str(s.obj_id)
+                if cid in seen:
+                    continue
+                seen.add(cid)
+            out.append(s)
+        return out
+
+    def _assign_cumulative(
+        self, segs: List[AttenuationSegment],
+    ) -> None:
+        """Накопительная сумма от корня пути (начало = 0 dB).
+
+        После каждого сегмента-ребра: Σ = Σ_prev + db сегмента.
+        Для нелинейного CGraph каждая ветвь (PathReport) считается
+        от своего корня независимо.
+        """
+        cum = cum_min = cum_max = 0.0
+        for s in segs:
+            cum += float(s.db or 0.0)
+            cum_min += float(s.db_min if s.db_min is not None else s.db or 0.0)
+            cum_max += float(s.db_max if s.db_max is not None else s.db or 0.0)
+            s.db_cumulative = cum
+            s.db_cumulative_min = cum_min
+            s.db_cumulative_max = cum_max
+
     def _report_from_vpath(
         self, vpath: List[int], *, direction: Optional[str] = None,
     ) -> PathReport:
@@ -562,6 +599,10 @@ class AttenuationPathMixin:
                 a, b, direction=direction, path_endpoints=endpoints,
                 cross_adapter_seen=cross_adapter_seen,
             ))
+        # Страховка: дедуп adapter, если edge-логика пропустила дубликат.
+        segs = self._dedupe_cross_adapters(segs)
+        # Накопительная сумма от корня (вершина 0 → 0 dB).
+        self._assign_cumulative(segs)
         total = sum(s.db for s in segs)
         total_min = sum((s.db_min if s.db_min is not None else s.db) for s in segs)
         total_max = sum((s.db_max if s.db_max is not None else s.db) for s in segs)
