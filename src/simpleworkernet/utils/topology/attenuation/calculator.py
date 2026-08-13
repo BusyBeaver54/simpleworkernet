@@ -11,14 +11,17 @@ from .catalog import AttenuationCatalog
 from . import splitter_load
 from .models import PathReport
 from .multipath import MultiPathReport
-from .calculator_segments import AttenuationSegmentsMixin, _label_vertex
-from .calculator_path import AttenuationPathMixin
-from .calculator_edge import AttenuationEdgeMixin
-from .calculator_build import AttenuationBuildMixin
-from .calculator_fn import AttenuationFNMixin
-from .calculator_fiber import AttenuationFiberMixin
-from .calculator_paths import AttenuationPathsMixin
-from .calculator_graph import AttenuationGraphMixin
+from .calculator_core import (
+    AttenuationSegmentsMixin,
+    AttenuationPathMixin,
+    AttenuationEdgeMixin,
+    AttenuationBuildMixin,
+    AttenuationFNMixin,
+    AttenuationFiberMixin,
+    AttenuationPathsMixin,
+    AttenuationGraphMixin,
+    _label_vertex,
+)
 from .errors import AttenuationError
 
 VertexRef = Union[int, Interface, Tuple[str, Union[int, str], int, int], str]
@@ -161,7 +164,7 @@ class Attenuation(
         obj2_port: Optional[int] = None,
         direction: Optional[str] = None,
         max_paths: Optional[int] = None,
-    ):
+    ) -> Union[PathReport, MultiPathReport, List[Any]]:
         """Расчёт затухания. Всегда MultiPathReport."""
         prev_wl = self.wavelength
         if wavelength is not None:
@@ -225,7 +228,7 @@ class Attenuation(
 
     def _calculate_all_graphs(
         self, *, direction: Optional[str] = None, max_paths: Optional[int] = None,
-    ):
+    ) -> List[Any]:
         graphs = list(self.cgraphs) if self.cgraphs else (
             [self.g] if self.g is not None else []
         )
@@ -274,7 +277,7 @@ class Attenuation(
 
     def _calculate_full_cgraph(
         self, *, direction: Optional[str] = None, max_paths: Optional[int] = None,
-    ):
+    ) -> List[Any]:
         """Затухания по всем значимым путям текущего CGraph."""
         if self.g is None or getattr(self.g, "vcount", lambda: 0)() == 0:
             raise AttenuationError("CGraph пуст — нечего считать")

@@ -9,7 +9,6 @@ from .constants import (
 from .graphs import CGraph, FNGraph
 from .keys import ObjKey
 from .merge import merge_cgraphs, merge_fngraphs
-from .topology_build_methods import NetworkTopologyBuildMixin
 
 _logger = None
 
@@ -22,12 +21,260 @@ def _get_logger():
     return _logger
 
 
-def _normalize_set(value):
+def _normalize_set(value: Any) -> Optional[set]:
     if value is None:
         return None
     if isinstance(value, (int, str)):
         return {int(value)}
     return set(value)
+
+
+class NetworkTopologyBuildMixin:
+    def build_from_device(
+        self, object_type: str, object_id: int, port: object = None,
+        included_fibers: object = None, excluded_fibers: object = None,
+        excluded_nodes: object = None,
+        linear: bool = False, linear_on_fail: str = "raise",
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM DEVICE: {object_type}:{object_id} (port={port}) ===")
+        self._attach(self._build_cgraph(
+            object_type, object_id, port=port,
+            included_fibers=_normalize_set(included_fibers),
+            excluded_fibers=_normalize_set(excluded_fibers),
+            excluded_nodes=_normalize_set(excluded_nodes),
+            linear=linear, linear_on_fail=linear_on_fail,
+        ))
+        return self._finalize_build()
+
+    def build_from_customer(
+        self, object_id: int,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM CUSTOMER: {object_id} ===")
+        self._attach(self._build_cgraph(
+            TYPE_CUSTOMER, object_id, port=None,
+            included_fibers=_normalize_set(included_fibers),
+            excluded_fibers=_normalize_set(excluded_fibers),
+            excluded_nodes=_normalize_set(excluded_nodes),
+        ))
+        return self._finalize_build()
+
+    def build_from_cross(
+        self, object_id: str, port=None, side: Optional[int] = None,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM CROSS: {object_id} (port={port}, side={side}) ===")
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
+        exc_n = _normalize_set(excluded_nodes)
+        if port is None:
+            ports = set()
+            for rec in self._get_commutations(TYPE_CROSS, object_id):
+                if getattr(rec, "clps_last", None) == "finish":
+                    continue
+                p = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                if p > 0:
+                    ports.add(p)
+            for p in ports:
+                self._attach(self._build_cgraph(
+                    TYPE_CROSS, object_id, port=p, side=None,
+                    included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+                ))
+            return self._finalize_build()
+        self._attach(self._build_cgraph(
+            TYPE_CROSS, object_id, port=port, side=side,
+            included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+        ))
+        return self._finalize_build()
+
+    def build_from_splitter(
+        self, object_id: int, port=None, side: Optional[int] = None,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM SPLITTER: {object_id} (port={port}, side={side}) ===")
+        if port is None and side is None:
+            interfaces = set()
+            for rec in self._get_commutations(TYPE_SPLITTER, object_id):
+                if getattr(rec, "clps_last", None) == "finish":
+                    continue
+                s = int(rec.clps_first) if rec.clps_first is not None else 1
+                p = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                interfaces.add((s, p))
+            graphs = []
+            for s, p in interfaces:
+                g = self._build_cgraph(
+                    TYPE_SPLITTER, object_id, port=p, side=s,
+                    included_fibers=_normalize_set(included_fibers),
+                    excluded_fibers=_normalize_set(excluded_fibers),
+                    excluded_nodes=_normalize_set(excluded_nodes),
+                )
+                if g is not None and g.is_connected():
+                    graphs.append(g)
+            if graphs:
+                merged = merge_cgraphs(graphs, self.client, self.cache)
+                if merged is not None:
+                    self._attach(merged)
+                else:
+                    for g in graphs:
+                        self._attach(g)
+            return self._finalize_build()
+        self._attach(self._build_cgraph(
+            TYPE_SPLITTER, object_id, port=port, side=side,
+            included_fibers=_normalize_set(included_fibers),
+            excluded_fibers=_normalize_set(excluded_fibers),
+            excluded_nodes=_normalize_set(excluded_nodes),
+        ))
+        return self._finalize_build()
+
+    def build_from_cwdm(
+        self, object_id: int, port=None, side: Optional[int] = None,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM CWDM: {object_id} (port={port}, side={side}) ===")
+        if port is None and side is None:
+            interfaces = set()
+            for rec in self._get_commutations(TYPE_CWDM, object_id):
+                if getattr(rec, "clps_last", None) == "finish":
+                    continue
+                s = int(rec.clps_first) if rec.clps_first is not None else 1
+                p = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                interfaces.add((s, p))
+            graphs = []
+            for s, p in interfaces:
+                g = self._build_cgraph(
+                    TYPE_CWDM, object_id, port=p, side=s,
+                    included_fibers=_normalize_set(included_fibers),
+                    excluded_fibers=_normalize_set(excluded_fibers),
+                    excluded_nodes=_normalize_set(excluded_nodes),
+                )
+                if g is not None and g.is_connected():
+                    graphs.append(g)
+            if graphs:
+                merged = merge_cgraphs(graphs, self.client, self.cache)
+                if merged is not None:
+                    self._attach(merged)
+                else:
+                    for g in graphs:
+                        self._attach(g)
+            return self._finalize_build()
+        self._attach(self._build_cgraph(
+            TYPE_CWDM, object_id, port=port, side=side,
+            included_fibers=_normalize_set(included_fibers),
+            excluded_fibers=_normalize_set(excluded_fibers),
+            excluded_nodes=_normalize_set(excluded_nodes),
+        ))
+        return self._finalize_build()
+
+    def build_from_fiber(
+        self, object_id: int, port=None, side: Optional[int] = None,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM FIBER: cable={object_id}, port={port}, side={side} ===")
+        self._attach(self._build_cgraph(
+            TYPE_FIBER, object_id, port=port, side=side,
+            included_fibers=_normalize_set(included_fibers),
+            excluded_fibers=_normalize_set(excluded_fibers),
+            excluded_nodes=_normalize_set(excluded_nodes),
+        ))
+        return self._finalize_build()
+
+    def build_from_node(
+        self, object_id: int,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM NODE: {object_id} ===")
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
+        exc_n = _normalize_set(excluded_nodes)
+        fn = FNGraph(self.client, cache=self.cache)
+        fn.build(object_id, included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n)
+        if fn.vcount() == 0:
+            self.logger.warning(f"Не удалось построить FNGraph от узла {object_id}")
+            return self._finalize_build()
+        self._set_fngraph(fn)
+        for node_id in [v["node_id"] for v in fn.vs]:
+            if exc_n is not None and node_id in exc_n:
+                continue
+            for obj_type, obj_id, port_info in self._get_objects_for_node(node_id):
+                if self._find_cgraph_for_object(ObjKey(obj_type, obj_id)) is not None:
+                    continue
+                try:
+                    if obj_type == TYPE_CROSS:
+                        ports = set()
+                        for rec in self._get_commutations(TYPE_CROSS, obj_id):
+                            if getattr(rec, "clps_last", None) == "finish":
+                                continue
+                            p = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                            if p > 0:
+                                ports.add(p)
+                        for p in ports or [None]:
+                            cg = self._build_cgraph(
+                                TYPE_CROSS, obj_id, port=p, side=None,
+                                included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+                            )
+                            if cg is not None:
+                                self._add_cgraph(cg)
+                    elif obj_type == TYPE_FIBER:
+                        fiber_ports = set()
+                        for rec in self._get_commutations(TYPE_FIBER, obj_id):
+                            if getattr(rec, "clps_last", None) == "finish":
+                                continue
+                            fid = int(rec.clps_mid) if rec.clps_mid is not None else 0
+                            if fid > 0:
+                                fiber_ports.add(fid)
+                        for fp in fiber_ports:
+                            cg = self._build_cgraph(
+                                TYPE_FIBER, obj_id, port=fp, side=None,
+                                included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+                            )
+                            if cg is not None:
+                                self._add_cgraph(cg)
+                    else:
+                        cg = self._build_cgraph(
+                            obj_type, obj_id, port=port_info,
+                            included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+                        )
+                        if cg is not None:
+                            self._add_cgraph(cg)
+                except Exception as e:
+                    self.logger.warning(f"Ошибка построения от {obj_type}:{obj_id}: {e}")
+        return self._finalize_build()
+
+    def build_from_cable(
+        self, object_id: int,
+        included_fibers=None, excluded_fibers=None, excluded_nodes=None,
+    ) -> "NetworkTopology":
+        self._reset()
+        self.logger.info(f"=== BUILD FROM CABLE: {object_id} ===")
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
+        if inc is not None and object_id not in inc:
+            self.logger.warning(f"Кабель {object_id} не в included_fibers")
+            return self._finalize_build()
+        if exc_f is not None and object_id in exc_f:
+            self.logger.warning(f"Кабель {object_id} в excluded_fibers")
+            return self._finalize_build()
+        fiber_ports = set()
+        for rec in self._get_commutations(TYPE_FIBER, object_id):
+            if getattr(rec, "clps_last", None) == "finish":
+                continue
+            fid = int(rec.clps_mid) if rec.clps_mid is not None else 0
+            if fid > 0:
+                fiber_ports.add(fid)
+        for fp in fiber_ports:
+            self._attach(self._build_cgraph(
+                TYPE_FIBER, object_id, port=fp, side=None,
+                included_fibers=inc, excluded_fibers=exc_f,
+                excluded_nodes=_normalize_set(excluded_nodes),
+            ))
+        return self._finalize_build()
 
 
 class NetworkTopology(NetworkTopologyBuildMixin):
@@ -248,7 +495,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                     return cg
         return None
 
-    def _get_objects_for_node(self, node_id: int):
+    def _get_objects_for_node(self, node_id: int) -> List[Any]:
         objects = []
         try:
             for dev_id, dev in self.cache.get_all_devices(self.client).items():
@@ -284,9 +531,17 @@ class NetworkTopology(NetworkTopologyBuildMixin):
             self.logger.warning(f"Ошибка поиска кабелей в узле {node_id}: {e}")
         return objects
 
-    def get_linear(self, object_type=None, object_id=None, port=None, side=None, source="cgraph", cgraph_index=0):
+    def get_linear(
+        self,
+        object_type: Optional[str] = None,
+        object_id: Optional[Union[int, str]] = None,
+        port: Any = None,
+        side: Optional[int] = None,
+        source: str = "cgraph",
+        cgraph_index: int = 0,
+    ) -> Any:
         from .errors import TopologyBuildError
-        from .linear_extract import extract_linear_cgraph, extract_linear_fngraph
+        from .linear import extract_linear_cgraph, extract_linear_fngraph
         if source == "fngraph":
             if self.fngraph is None:
                 raise TopologyBuildError("FNGraph не построен")
@@ -308,7 +563,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                 out.extend(items or [])
         return out
 
-    def get_finish_by_object(self, object_type: str, object_id: Union[int, str]):
+    def get_finish_by_object(self, object_type: str, object_id: Union[int, str]) -> List[Any]:
         out = []
         for cg in self.cgraphs:
             fd = getattr(cg, "_finish_data", None) or {}
@@ -360,7 +615,7 @@ class NetworkTopology(NetworkTopologyBuildMixin):
     def get_crosses(self) -> List[str]:
         return [str(x) for x in self._collect_ids(TYPE_CROSS)]
 
-    def customer(self, customer_id: int):
+    def customer(self, customer_id: int) -> Optional[Any]:
         """Данные абонента: кэш или точечный API (Customer.get_data).
 
         При BFS/затуханиях API не вызывается (см. CGraph.load_object /
@@ -368,27 +623,27 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         """
         return self.cache.get_customer(self.client, int(customer_id))
 
-    def node(self, node_id: int):
+    def node(self, node_id: int) -> Optional[Any]:
         return self.cache.get_node(self.client, node_id)
 
-    def cable(self, cable_id: int):
+    def cable(self, cable_id: int) -> Optional[Any]:
         return self.fiber(cable_id)
 
-    def fiber(self, fiber_id: int):
+    def fiber(self, fiber_id: int) -> Optional[Any]:
         return self.cache.get_fiber(self.client, fiber_id)
 
-    def device(self, device_id: int, object_type: Optional[str] = None):
+    def device(self, device_id: int, object_type: Optional[str] = None) -> Optional[Any]:
         """Устройство по id. object_type (olt/switch/onu/radio) опционален —
         без него API вызывается с object_type=all."""
         return self.cache.get_device(self.client, object_type, int(device_id))
 
-    def splitter(self, splitter_id: int):
+    def splitter(self, splitter_id: int) -> Optional[Any]:
         return self.cache.get_splitter(self.client, splitter_id)
 
-    def cwdm(self, cwdm_id: int):
+    def cwdm(self, cwdm_id: int) -> Optional[Any]:
         return self.cache.get_cwdm(self.client, cwdm_id)
 
-    def cross(self, cross_uuid: str):
+    def cross(self, cross_uuid: str) -> Optional[Any]:
         return self.cache.get_cross(self.client, cross_uuid)
 
     def save_to_file(self, filepath: str) -> None:

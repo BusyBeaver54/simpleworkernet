@@ -30,6 +30,7 @@ from .constants import (
     TYPE_OLT,
     TYPE_SPLITTER,
     TYPE_SWITCH,
+    TYPE_RADIO,
 )
 
 _logger = None
@@ -668,9 +669,11 @@ class DataCache:
         def loader() -> Optional[Any]:
             try:
                 result = client.Device.get_data(
-                    object_type=api_type, object_id=int(obj_id),
+                    object_type=api_type,  # type: ignore[arg-type]
+                    object_id=int(obj_id),
                 )
-                return result[0] if result and len(result) > 0 else None
+                items = _result_to_objects(result)
+                return items[0] if items else None
             except Exception as e:
                 _get_logger().warning(
                     "Не удалось загрузить устройство %s:%s: %s",
@@ -750,17 +753,30 @@ class DataCache:
     def get_commutations_by_object(
         self, client: WorkerNetClient, obj_type: str, obj_id: Union[int, str], is_finish_data: int = 0,
     ) -> List[Any]:
-        actual_type = TYPE_SWITCH if obj_type in DEVICE_TYPES else obj_type
+        # Commutation.get_data: customer|switch|radio|cross|fiber|splitter
+        # olt/onu/switch → switch; radio → radio; остальные как есть
+        if obj_type == TYPE_RADIO:
+            actual_type = TYPE_RADIO
+        elif obj_type in DEVICE_TYPES:
+            actual_type = TYPE_SWITCH
+        else:
+            actual_type = obj_type
+
         def loader() -> List[Any]:
             api_type = actual_type
             api_id = str(obj_id) if api_type == TYPE_CROSS else int(obj_id)
             try:
                 result = client.Commutation.get_data(
-                    object_type=api_type, object_id=api_id, is_finish_data=is_finish_data,
+                    object_type=api_type,  # type: ignore[arg-type]
+                    object_id=api_id,
+                    is_finish_data=is_finish_data,
                 )
-                return result.to_list() if result else []
+                return _result_to_objects(result)
             except Exception as e:
-                _get_logger().error(f"Ошибка загрузки коммутаций для {actual_type}:{obj_id}: {e}")
+                _get_logger().error(
+                    "Ошибка загрузки коммутаций для %s:%s: %s",
+                    actual_type, obj_id, e,
+                )
                 return []
         return self.get_or_load_commutations(actual_type, obj_id, loader)
 
