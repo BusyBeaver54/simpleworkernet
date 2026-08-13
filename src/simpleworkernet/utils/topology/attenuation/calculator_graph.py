@@ -132,7 +132,7 @@ class AttenuationGraphMixin:
             if not p or len(p) < 2:
                 continue
             sa, sb = _sig(p[0]), _sig(p[-1])
-            key = tuple(sorted((sa, sb))
+            key = tuple(sorted((sa, sb)))
             if key in seen:
                 continue
             chosen = best.get(key)
