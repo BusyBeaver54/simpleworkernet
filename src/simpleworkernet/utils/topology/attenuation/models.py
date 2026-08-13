@@ -181,10 +181,10 @@ class AttenuationSegment:
 
 @dataclass
 class PathReport:
-    total_db: float
-    wavelength_nm: int
+    total_db: float = 0.0
     total_db_min: float = 0.0
     total_db_max: float = 0.0
+    wavelength_nm: int = 1550
     dataversion: str = DATA_VERSION
     segments: List[AttenuationSegment] = field(default_factory=list)
     vertex_path: List[int] = field(default_factory=list)
@@ -199,11 +199,31 @@ class PathReport:
     missing: List[str] = field(default_factory=list)
     query_meta: dict = field(default_factory=dict)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Дозаполнить total_* и кумулятивные path_db* по сегментам.
+
+        path_db — сумма db от корня пути (from_endpoint / первый сегмент
+        после ориентации upstream/downstream или obj1→obj2) до текущего
+        сегмента включительно.
+        """
         if not self.total_db_min:
             self.total_db_min = self.total_db
         if not self.total_db_max:
             self.total_db_max = self.total_db
+        acc = acc_min = acc_max = 0.0
+        for s in self.segments:
+            if s.path_db is not None:
+                # уже проставлено (load / calculator) — синхронизируем аккумулятор
+                acc = float(s.path_db)
+                acc_min = float(s.path_db_min if s.path_db_min is not None else s.path_db)
+                acc_max = float(s.path_db_max if s.path_db_max is not None else s.path_db)
+                continue
+            acc += float(s.db or 0.0)
+            acc_min += float(s.db_min if s.db_min is not None else s.db or 0.0)
+            acc_max += float(s.db_max if s.db_max is not None else s.db or 0.0)
+            s.path_db = acc
+            s.path_db_min = acc_min
+            s.path_db_max = acc_max
 
     @property
     def fiber_length_m(self) -> float:
@@ -222,7 +242,7 @@ class PathReport:
         return sum(s.db for s in self.segments if s.kind in ("splice", "adapter", "connector"))
 
     def by_kind(self) -> dict:
-        out: dict = {}
+        out = {}
         for s in self.segments:
             out[s.kind] = out.get(s.kind, 0.0) + s.db
         return {k: round(v, 4) for k, v in out.items()}
@@ -230,12 +250,14 @@ class PathReport:
     def _pick_device_customer(self):
         device = self.device_endpoint
         customer = self.customer_endpoint
-        ends = [e for e in (self.from_endpoint, self.to_endpoint) if e is not None]
+        ends = [ep for ep in (self.from_endpoint, self.to_endpoint) if ep is not None]
+
         if customer is None:
             for ep in ends:
                 if ep.obj_type == TYPE_CUSTOMER:
                     customer = ep
                     break
+
         if device is None:
             for prefer in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO):
                 for ep in ends:
