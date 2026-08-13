@@ -132,7 +132,7 @@ class AttenuationGraphMixin:
             if not p or len(p) < 2:
                 continue
             sa, sb = _sig(p[0]), _sig(p[-1])
-            key = tuple(sorted((sa, sb)))
+            key = tuple(sorted((sa, sb))
             if key in seen:
                 continue
             chosen = best.get(key)
@@ -170,6 +170,30 @@ class AttenuationGraphMixin:
             if v["obj_type"] in types:
                 out.append(int(v.index))
         return out
+
+    def _terminal_endpoints(self) -> List[int]:
+        """Вершины, на которых заканчивается коммутация.
+
+        1) terminate_vertex=True (ставится билдером для любого типа),
+        2) иначе degree==1,
+        3) иначе TERMINAL_TYPES.
+        """
+        if self.g is None:
+            return []
+        marked: List[int] = []
+        for v in self.g.vs:
+            try:
+                if v["terminate_vertex"]:
+                    marked.append(int(v.index))
+            except Exception:
+                continue
+        if marked:
+            return marked
+        leaves = self._leaf_vertices()
+        if leaves:
+            return leaves
+        from ..constants import TERMINAL_TYPES
+        return self._vertices_of_types(TERMINAL_TYPES)
 
     def _leaf_vertices(self) -> List[int]:
         if self.g is None:
