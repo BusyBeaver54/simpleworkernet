@@ -361,7 +361,12 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         return [str(x) for x in self._collect_ids(TYPE_CROSS)]
 
     def customer(self, customer_id: int):
-        return self.cache.get_object(TYPE_CUSTOMER, customer_id)
+        """Данные абонента: кэш или точечный API (Customer.get_data).
+
+        При BFS/затуханиях API не вызывается (см. CGraph.load_object /
+        ensure_api_obj) — только уже закэшированные объекты.
+        """
+        return self.cache.get_customer(self.client, int(customer_id))
 
     def node(self, node_id: int):
         return self.cache.get_node(self.client, node_id)
