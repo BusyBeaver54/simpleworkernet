@@ -556,12 +556,67 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         )
 
     def get_finish_by_node(self, node_id: int) -> List[Any]:
-        out = []
+        """Записи Commutation.Get_data (finish) для конечных вершин в node_id.
+
+        Вершины CGraph с ``node_id`` и ``terminate_vertex`` (или непустым
+        ``finish_data``) — их ``finish_data`` = объекты ответа
+        ``Commutation.get_data(..., is_finish_data=1)`` с clps_last=finish.
+        """
+        nid = int(node_id)
+        out: List[Any] = []
+        seen: set = set()
+
+        def _add(items: Any) -> None:
+            for rec in items or []:
+                cid = getattr(rec, "connect_id", None)
+                if cid is not None:
+                    key = int(cid)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                out.append(rec)
+
         for cg in self.cgraphs:
+            try:
+                vs = cg.vs
+            except Exception:
+                continue
+
+            term_objs: set = set()
+            for v in vs:
+                try:
+                    vn = v["node_id"]
+                    if vn is None or int(vn) != nid:
+                        continue
+                except Exception:
+                    continue
+                is_term = False
+                try:
+                    is_term = bool(v["terminate_vertex"])
+                except Exception:
+                    pass
+                items: List[Any] = []
+                try:
+                    items = list(v["finish_data"] or [])
+                except Exception:
+                    items = []
+                if not is_term and not items:
+                    continue
+                try:
+                    term_objs.add((str(v["obj_type"]), str(v["obj_id"])))
+                except Exception:
+                    pass
+                _add(items)
+
+            # Добор из _finish_data, если на вершине список пуст
             fd = getattr(cg, "_finish_data", None) or {}
             for key, items in fd.items():
-                out.extend(items or [])
+                ot = getattr(key, "obj_type", None)
+                oid = getattr(key, "id", None)
+                if (str(ot), str(oid)) in term_objs:
+                    _add(items)
         return out
+
 
     def get_finish_by_object(self, object_type: str, object_id: Union[int, str]) -> List[Any]:
         out = []
