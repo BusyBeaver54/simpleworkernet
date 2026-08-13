@@ -153,6 +153,32 @@ class GraphBuilder:
             return [Interface(obj_key, s, p) for p in use]
         return [Interface(obj_key, 1, 0)]
 
+
+    @staticmethod
+    def _finish_for_key(ctx, obj_key) -> list:
+        """finish_data с учётом int/str id (вершина хранит obj_id как str)."""
+        fd = ctx.finish_data
+        if not fd:
+            return []
+        if obj_key in fd:
+            return list(fd.get(obj_key) or [])
+        variants = [obj_key.id]
+        if isinstance(obj_key.id, str) and str(obj_key.id).isdigit():
+            variants.append(int(obj_key.id))
+        elif isinstance(obj_key.id, int):
+            variants.append(str(obj_key.id))
+        for vid in variants:
+            k = ObjKey(obj_key.obj_type, vid)
+            if k in fd:
+                return list(fd.get(k) or [])
+        # last resort: string-compare scan
+        want_t = str(obj_key.obj_type)
+        want_i = str(obj_key.id)
+        for k, items in fd.items():
+            if str(getattr(k, "obj_type", "")) == want_t and str(getattr(k, "id", "")) == want_i:
+                return list(items or [])
+        return []
+
     def _mark_terminate_vertices(self, ctx) -> None:
         g = ctx.graph
         def neighbor_key(record):
@@ -168,15 +194,19 @@ class GraphBuilder:
             obj_type, obj_id = v["obj_type"], v["obj_id"]
             side = v.attributes().get("side", 1)
             port = v.attributes().get("port", 0)
-            obj_key = ObjKey(obj_type, obj_id)
+            # obj_id на вершине всегда str — для ObjKey предпочитаем int, если digit
+            oid: object = obj_id
+            if isinstance(obj_id, str) and obj_id.isdigit():
+                oid = int(obj_id)
+            obj_key = ObjKey(obj_type, oid)
             if obj_type in (TYPE_OLT, TYPE_SWITCH) or obj_type in TERMINAL_TYPES:
                 v["terminate_vertex"] = True
-                v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                v["finish_data"] = self._finish_for_key(ctx, obj_key)
                 continue
             comms = g.load_commutations(obj_key)
             if not comms:
                 v["terminate_vertex"] = True
-                v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                v["finish_data"] = self._finish_for_key(ctx, obj_key)
                 continue
             if obj_type in (TYPE_CROSS, TYPE_FIBER):
                 opposite_side = 2 if side == 1 else 1
@@ -188,12 +218,12 @@ class GraphBuilder:
                         break
                 if opposite_record is None:
                     v["terminate_vertex"] = True
-                    v["finish_data"] = ctx.finish_data.get(obj_key, [])
+                    v["finish_data"] = self._finish_for_key(ctx, obj_key)
                     continue
                 nk = neighbor_key(opposite_record)
                 is_term = nk is None or nk.obj_type in TERMINAL_TYPES
                 v["terminate_vertex"] = is_term
-                v["finish_data"] = ctx.finish_data.get(obj_key, []) if is_term else []
+                v["finish_data"] = self._finish_for_key(ctx, obj_key) if is_term else []
                 continue
             if obj_type in (TYPE_SPLITTER, TYPE_CWDM):
                 has_non_term = any(
@@ -201,7 +231,7 @@ class GraphBuilder:
                     for rec in comms
                 )
                 v["terminate_vertex"] = not has_non_term
-                v["finish_data"] = ctx.finish_data.get(obj_key, []) if not has_non_term else []
+                v["finish_data"] = self._finish_for_key(ctx, obj_key) if not has_non_term else []
                 continue
             v["terminate_vertex"] = True
-            v["finish_data"] = ctx.finish_data.get(obj_key, [])
+            v["finish_data"] = self._finish_for_key(ctx, obj_key)

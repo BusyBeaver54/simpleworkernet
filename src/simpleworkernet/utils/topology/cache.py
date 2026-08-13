@@ -751,8 +751,15 @@ class DataCache:
         return self.get_or_load_object(TYPE_CWDM, obj_id, loader)
 
     def get_commutations_by_object(
-        self, client: WorkerNetClient, obj_type: str, obj_id: Union[int, str], is_finish_data: int = 0,
+        self, client: WorkerNetClient, obj_type: str, obj_id: Union[int, str], is_finish_data: int = 1,
     ) -> List[Any]:
+        """Коммутации объекта. Всегда грузим с is_finish_data=1 (в ответе есть
+        и обычные, и finish-записи с clps_last='finish').
+
+        Параметр is_finish_data оставлен для совместимости, но кэш один:
+        иначе первый вызов с 0 «отравляет» кэш и finish_data в CGraph пустеет.
+        Фильтрацию finish делает split_finish / вызывающий код.
+        """
         # Commutation.get_data: customer|switch|radio|cross|fiber|splitter
         # olt/onu/switch → switch; radio → radio; остальные как есть
         if obj_type == TYPE_RADIO:
@@ -769,7 +776,7 @@ class DataCache:
                 result = client.Commutation.get_data(
                     object_type=api_type,  # type: ignore[arg-type]
                     object_id=api_id,
-                    is_finish_data=is_finish_data,
+                    is_finish_data=1,
                 )
                 return _result_to_objects(result)
             except Exception as e:
@@ -779,6 +786,7 @@ class DataCache:
                 )
                 return []
         return self.get_or_load_commutations(actual_type, obj_id, loader)
+
 
     def to_dict(self) -> dict:
         return {

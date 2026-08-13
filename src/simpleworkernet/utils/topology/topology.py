@@ -556,11 +556,11 @@ class NetworkTopology(NetworkTopologyBuildMixin):
         )
 
     def get_finish_by_node(self, node_id: int) -> List[Any]:
-        """Записи Commutation.Get_data (finish) для конечных вершин в node_id.
+        """Commutation.Get_data (finish) для конечных вершин CGraph в node_id.
 
-        Вершины CGraph с ``node_id`` и ``terminate_vertex`` (или непустым
-        ``finish_data``) — их ``finish_data`` = объекты ответа
-        ``Commutation.get_data(..., is_finish_data=1)`` с clps_last=finish.
+        Конечная вершина: ``terminate_vertex`` или degree==1 в CGraph.
+        Источники записей: ``v["finish_data"]`` и ``cgraph._finish_data``
+        (записи с clps_last='finish' при загрузке is_finish_data=1).
         """
         nid = int(node_id)
         out: List[Any] = []
@@ -570,11 +570,17 @@ class NetworkTopology(NetworkTopologyBuildMixin):
             for rec in items or []:
                 cid = getattr(rec, "connect_id", None)
                 if cid is not None:
-                    key = int(cid)
+                    try:
+                        key = int(cid)
+                    except Exception:
+                        key = cid
                     if key in seen:
                         continue
                     seen.add(key)
                 out.append(rec)
+
+        def _obj_pair(obj_type: Any, obj_id: Any) -> tuple:
+            return (str(obj_type), str(obj_id))
 
         for cg in self.cgraphs:
             try:
@@ -590,30 +596,38 @@ class NetworkTopology(NetworkTopologyBuildMixin):
                         continue
                 except Exception:
                     continue
+
                 is_term = False
                 try:
                     is_term = bool(v["terminate_vertex"])
                 except Exception:
                     pass
+                # leaf в CGraph тоже считаем конечной
+                if not is_term:
+                    try:
+                        is_term = int(v.degree()) <= 1
+                    except Exception:
+                        pass
+
                 items: List[Any] = []
                 try:
                     items = list(v["finish_data"] or [])
                 except Exception:
                     items = []
+
                 if not is_term and not items:
                     continue
                 try:
-                    term_objs.add((str(v["obj_type"]), str(v["obj_id"])))
+                    term_objs.add(_obj_pair(v["obj_type"], v["obj_id"]))
                 except Exception:
                     pass
                 _add(items)
 
-            # Добор из _finish_data, если на вершине список пуст
             fd = getattr(cg, "_finish_data", None) or {}
             for key, items in fd.items():
                 ot = getattr(key, "obj_type", None)
                 oid = getattr(key, "id", None)
-                if (str(ot), str(oid)) in term_objs:
+                if _obj_pair(ot, oid) in term_objs:
                     _add(items)
         return out
 
