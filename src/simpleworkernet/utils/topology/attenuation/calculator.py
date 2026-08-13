@@ -284,38 +284,36 @@ class Attenuation(
         except Exception:
             pass
 
-        # Все конечные точки графа — вершины со степенью 1 (любой тип:
-        # customer, olt, fiber, splitter, cross, cwdm, …). Именно на них
-        # заканчивается коммутация в дереве, построенном от порта.
-        leaves = self._leaf_vertices()
-        if len(leaves) < 2:
+        # Конечные точки = где заканчивается коммутация (любой тип объекта).
+        # Билдер помечает их terminate_vertex=True; фоллбэк — degree==1 / TERMINAL_TYPES.
+        ends = self._terminal_endpoints()
+        if len(ends) < 2:
             raise AttenuationError(
-                "в CGraph меньше двух конечных вершин (degree==1) для расчёта"
+                "в CGraph меньше двух конечных вершин (terminate_vertex/degree==1) "
+                "для расчёта"
             )
 
-        # Источники: устройства среди листьев (OLT в приоритете).
-        # Если среди листьев устройств нет (OLT имеет degree>1) —
-        # подтягиваем устройства из всего графа как корни.
-        device_leaves = [
-            v for v in leaves
+        # Источники: устройства среди конечных точек (OLT в приоритете).
+        # Если OLT не помечен как terminate — берём устройства из всего графа.
+        device_ends = [
+            v for v in ends
             if self.g.vs[v]["obj_type"] in _SINK_TYPES
         ]
-        pair_sources = self._dedupe_device_vertices(device_leaves)
+        pair_sources = self._dedupe_device_vertices(device_ends)
         if not pair_sources:
             pair_sources = self._dedupe_device_vertices(
                 self._vertices_of_types(_SINK_TYPES)
             )
 
-        # Цели — все листья, кроме выбранных источников
+        # Цели — все остальные конечные точки (fiber/splitter/cross/customer/…)
         src_set = set(pair_sources)
-        pair_sinks = [v for v in leaves if v not in src_set]
+        pair_sinks = [v for v in ends if v not in src_set]
 
-        # Фоллбэк: нет устройств → берём первый лист как source, остальные как sinks
         if not pair_sources:
-            pair_sources = leaves[:1]
-            pair_sinks = leaves[1:]
+            pair_sources = ends[:1]
+            pair_sinks = ends[1:]
         if not pair_sinks:
-            pair_sinks = [v for v in leaves if v not in set(pair_sources)]
+            pair_sinks = [v for v in ends if v not in set(pair_sources)]
 
         if not pair_sources or not pair_sinks:
             raise AttenuationError(
