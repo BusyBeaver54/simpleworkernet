@@ -1,6 +1,6 @@
 # Структура пакета
 
-Полное дерево исходников `src/simpleworkernet/` (и `src/assets/`).
+Полное дерево исходников `src/simpleworkernet/`.
 
 ```text
 src/
@@ -81,64 +81,44 @@ src/
         │
         └── topology/
             ├── __init__.py                 # публичный API топологии
-            ├── topology.py                 # NetworkTopology
-            ├── topology_build_methods.py   # build_from_*
-            ├── topology_build_params.py
-            ├── topology_get_linear.py
-            ├── cache.py                    # DataCache
+            ├── topology.py                 # NetworkTopology + build_from_*
+            ├── cache.py                    # DataCache (device dual-index, object_type=all)
             ├── constants.py                # реэкспорт TYPE_*
             ├── context.py                  # BuildContext
             ├── errors.py                   # TopologyBuildError
             ├── keys.py                     # ObjKey, Interface
             ├── models.py                   # CGraphVertex, FNGraphVertex, …
             ├── ports_spec.py               # expand_ports
-            ├── paths.py                    # simple paths
-            ├── linear.py                   # LinearPathFinder
-            ├── linear_extract.py           # extract_linear_cgraph / fngraph
+            ├── paths.py                    # simple / shortest paths
+            ├── linear.py                   # LinearPathFinder + extract_linear_*
             ├── merge.py                    # merge_cgraphs, merge_fngraphs
             │
             ├── builders/
             │   ├── __init__.py
             │   ├── base.py                 # GraphBuilder (BFS)
-            │   ├── handlers.py
-            │   ├── handlers_splitter.py
-            │   └── handlers_util.py
+            │   └── handlers.py             # terminal / fiber / cross / splitter+cwdm
             │
             ├── graphs/
-            │   ├── __init__.py
+            │   ├── __init__.py             # CGraph.build binding
             │   ├── base.py                 # BaseGraph (igraph wrapper)
-            │   ├── cgraph.py               # CGraph — граф коммутаций
-            │   ├── cgraph_extra.py
+            │   ├── cgraph.py               # CGraph — граф коммутаций (+ is_linear)
             │   └── fngraph.py              # FNGraph — граф сооружений
             │
             └── attenuation/                # оптические затухания
                 ├── __init__.py
                 ├── calculator.py           # Attenuation.calculate
-                ├── calculator_build.py     # on-demand CGraph
-                ├── calculator_edge.py      # сегменты по рёбрам
-                ├── calculator_fiber.py
-                ├── calculator_fn.py
+                ├── calculator_core.py      # mixins: path, edge, fiber, graph, …
                 ├── calculator_pairs.py     # PairPlan, validate
-                ├── calculator_path.py      # PathReport, port_name, fiber meta
-                ├── calculator_paths.py     # find_paths / simple_paths
-                ├── calculator_segments.py  # attrs, length, labels
-                ├── catalog.py              # AttenuationCatalog
-                ├── catalog_core.py         # defaults, fiber/cable triples
-                ├── catalog_fill.py
-                ├── catalog_force.py
-                ├── catalog_helpers.py
-                ├── catalog_io.py
-                ├── catalog_merge.py
-                ├── catalog_resolve.py      # splitter_port_db / _triple
-                ├── catalog_splitters.py
+                ├── catalog.py              # AttenuationCatalog (+ helpers)
+                ├── catalog_helpers.py      # ratio keys, db triples (legacy helper)
                 ├── defaults.json           # package defaults (ratio_defaults)
                 ├── errors.py               # AttenuationError
                 ├── length.py               # opticalen / geo length
                 ├── models.py               # EndpointInfo, AttenuationSegment, PathReport
                 ├── multipath.py            # MultiPathReport
                 ├── report_io.py            # save/load PathReport
-                ├── template.py             # generate/update/load JSON
-                └── template_fetch.py
+                ├── splitter_load.py        # загрузка сплиттеров для отчёта
+                └── template.py             # generate/update/load JSON (+ fetch)
 ```
 
 ## Назначение основных модулей
@@ -152,10 +132,12 @@ src/
 | `models/categories/*` | API-категории (Device, Fiber, Customer, …) |
 | `smartdata/` | Fluent-фильтры, метаданные пути |
 | `utils/graphics.py` | SVG → PNG (Wand / Cairo / Inkscape / WeasyPrint) |
-| `utils/topology/topology.py` | Оркестратор: CGraph + FNGraph |
-| `utils/topology/graphs/cgraph.py` | Граф коммутаций (интерфейсы) |
+| `utils/topology/topology.py` | Оркестратор: CGraph + FNGraph, `build_from_*` |
+| `utils/topology/graphs/cgraph.py` | Граф коммутаций (интерфейсы), `is_linear` |
 | `utils/topology/graphs/fngraph.py` | Граф сооружений (node + fiber) |
+| `utils/topology/builders/` | BFS GraphBuilder и handlers объектов |
 | `utils/topology/cache.py` | DataCache объектов/коммутаций |
+| `utils/topology/linear.py` | Линейные пути и extract_linear_* |
 | `utils/topology/attenuation/` | Расчёт затуханий, каталог, PathReport |
 
 ## Публичный API
