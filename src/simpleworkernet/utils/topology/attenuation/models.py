@@ -9,7 +9,7 @@ from typing import List, Optional, Union
 from ..constants import TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO, TYPE_CUSTOMER
 
 # Версия схемы PathReport/MultiPathReport (для сравнения при load)
-DATA_VERSION = "3.1"
+DATA_VERSION = "3.2"
 
 _DEVICE_EP = frozenset({TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO})
 
@@ -110,6 +110,10 @@ class AttenuationSegment:
     source: str = "default"
     db_min: Optional[float] = None
     db_max: Optional[float] = None
+    # Кумулятивное затухание от корня пути (from_endpoint) до конца этого сегмента
+    path_db: Optional[float] = None
+    path_db_min: Optional[float] = None
+    path_db_max: Optional[float] = None
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -124,6 +128,15 @@ class AttenuationSegment:
             "db": round(self.db, 4),
             "db_min": round(self.db_min if self.db_min is not None else self.db, 4),
             "db_max": round(self.db_max if self.db_max is not None else self.db, 4),
+            "path_db": (
+                round(self.path_db, 4) if self.path_db is not None else None
+            ),
+            "path_db_min": (
+                round(self.path_db_min, 4) if self.path_db_min is not None else None
+            ),
+            "path_db_max": (
+                round(self.path_db_max, 4) if self.path_db_max is not None else None
+            ),
             "description": self.description,
             "obj_type": self.obj_type,
             "obj_id": self.obj_id,
@@ -159,6 +172,9 @@ class AttenuationSegment:
             source=str(d.get("source") or "default"),
             db_min=float(d["db_min"]) if d.get("db_min") is not None else db,
             db_max=float(d["db_max"]) if d.get("db_max") is not None else db,
+            path_db=float(d["path_db"]) if d.get("path_db") is not None else None,
+            path_db_min=float(d["path_db_min"]) if d.get("path_db_min") is not None else None,
+            path_db_max=float(d["path_db_max"]) if d.get("path_db_max") is not None else None,
             meta=dict(d.get("meta") or {}),
         )
 
@@ -182,6 +198,32 @@ class PathReport:
     warnings: List[str] = field(default_factory=list)
     missing: List[str] = field(default_factory=list)
     query_meta: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Дозаполнить total_* и кумулятивные path_db* по сегментам.
+
+        path_db — сумма db от корня пути (from_endpoint / первый сегмент
+        после ориентации upstream/downstream или obj1→obj2) до текущего
+        сегмента включительно.
+        """
+        if not self.total_db_min:
+            self.total_db_min = self.total_db
+        if not self.total_db_max:
+            self.total_db_max = self.total_db
+        acc = acc_min = acc_max = 0.0
+        for s in self.segments:
+            if s.path_db is not None:
+                # уже проставлено (load / calculator) — синхронизируем аккумулятор
+                acc = float(s.path_db)
+                acc_min = float(s.path_db_min if s.path_db_min is not None else s.path_db)
+                acc_max = float(s.path_db_max if s.path_db_max is not None else s.path_db)
+                continue
+            acc += float(s.db or 0.0)
+            acc_min += float(s.db_min if s.db_min is not None else s.db or 0.0)
+            acc_max += float(s.db_max if s.db_max is not None else s.db or 0.0)
+            s.path_db = acc
+            s.path_db_min = acc_min
+            s.path_db_max = acc_max
 
     @property
     def fiber_length_m(self) -> float:
@@ -269,6 +311,11 @@ class PathReport:
                 bits.append(f"Lsrc={s.length_source}")
             bits.append(f"min={s.db_min:.3f}")
             bits.append(f"max={s.db_max:.3f}")
+            if s.path_db is not None:
+                bits.append(f"path={s.path_db:.3f}")
+            if s.path_db_min is not None and s.path_db_max is not None:
+                bits.append(f"path_min={s.path_db_min:.3f}")
+                bits.append(f"path_max={s.path_db_max:.3f}")
             if s.source:
                 bits.append(f"src={s.source}")
             extra = " [" + ", ".join(bits) + "]"
@@ -288,6 +335,8 @@ class PathReport:
             "total_db_min": round(self.total_db_min, 4),
             "total_db_max": round(self.total_db_max, 4),
             "wavelength_nm": self.wavelength_nm,
+            "from": self.from_label,
+            "to": self.to_label,
             "from_endpoint": self.from_endpoint.to_dict() if self.from_endpoint else None,
             "to_endpoint": self.to_endpoint.to_dict() if self.to_endpoint else None,
             "device_endpoint": device.to_dict() if device else None,
