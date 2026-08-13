@@ -1,4 +1,4 @@
-![SimpleWorkerNet](src/assets/src/assets/bjscV.jpg)
+![SimpleWorkerNet](src/assets/bjscV.jpg)
 
 # **SimpleWorkerNet**
 
