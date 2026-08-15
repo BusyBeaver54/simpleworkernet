@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpleworkernet"
-version = "1.1.2"
+version = "1.1.3"
 description = "Python клиент для API WorkerNet с поддержкой SmartData"
 readme = "README.md"
 authors = [
@@ -29,6 +29,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 keywords = ["workernet", "userside", "api", "erp"]
+
+[project.optional-dependencies]
+topology = [
+    "python-igraph",
+]
 
 [project.scripts]
 cleanup-simpleworkernet = "simpleworkernet.cli:main"

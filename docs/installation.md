@@ -27,6 +27,14 @@ pip install git+https://github.com/busy4beaver/simpleworkernet.git
 | `pyproj` | `projection="utm"` у GeoPoint | UTM недоступен (`HAS_PYPROJ=False`) |
 | `Wand` (+ ImageMagick) | SVG → PNG | Другие бэкенды (Cairo / Inkscape / WeasyPrint) или ошибка конвертации |
 
+Рекомендуемый способ для топологии (через extras, как в README):
+
+```bash
+pip install "simpleworkernet[topology]"
+```
+
+Либо вручную:
+
 ```bash
 pip install python-igraph pyproj Wand
 ```
