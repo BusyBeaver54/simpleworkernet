@@ -520,6 +520,42 @@ class AttenuationPathFiberMixin:
             return 1 if order else None
         return order.index(fk) + 1
 
+    def _fetch_fiber_core_att(self, fiber_core_id) -> Optional[Any]:
+        """Затухание ОВ из WorkerNet (Fiber.get_fiber → att). Только в meta, в расчёт не идёт."""
+        if fiber_core_id is None:
+            return None
+        client = getattr(self, "client", None)
+        if client is None:
+            return None
+        try:
+            cid = int(fiber_core_id)
+        except (TypeError, ValueError):
+            return None
+        try:
+            result = None
+            # кэш, если есть
+            cache = getattr(self, "cache", None)
+            if cache is not None and hasattr(cache, "get_fiber_core"):
+                try:
+                    result = cache.get_fiber_core(client, cid)
+                except Exception:
+                    result = None
+            if result is None:
+                result = client.Fiber.get_fiber(id=cid)
+                if result is not None:
+                    if hasattr(result, "to_list") and callable(result.to_list):
+                        items = result.to_list()
+                        result = items[0] if items else None
+                    elif isinstance(result, (list, tuple)):
+                        result = result[0] if result else None
+            if result is None:
+                return None
+            if isinstance(result, dict):
+                return result.get("att")
+            return getattr(result, "att", None)
+        except Exception:
+            return None
+
     def _fiber_segments(self, fiber_vertex_attrs: dict) -> List[AttenuationSegment]:
         fiber_vertex_attrs = self._ensure_api_obj(fiber_vertex_attrs)
         fiber_id = fiber_vertex_attrs.get("obj_id")
@@ -570,6 +606,8 @@ class AttenuationPathFiberMixin:
         core = self._fiber_core_info(fiber_vertex_attrs)
         port = core.get("port")
         port_name = core.get("port_name")
+        # att из WorkerNet (Fiber.get_fiber по id ОВ) — только meta, в расчёт не используем
+        wn_att = self._fetch_fiber_core_att(core.get("fiber_core_id"))
         meta_base = {
             "cable_name": cable_name,
             "length_source": length_source,
@@ -579,6 +617,7 @@ class AttenuationPathFiberMixin:
             "fiber_color": core.get("fiber_color"),
             "module_color": core.get("module_color"),
             "mf_path": core.get("mf_path"),
+            "att": wn_att,  # затухание ОВ из WorkerNet (не используется в расчёте)
         }
         if length_m is None:
             return [AttenuationSegment(
