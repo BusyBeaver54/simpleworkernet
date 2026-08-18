@@ -48,21 +48,64 @@ class MultiPathReport:
         return max(b.fiber_length_m for b in self.branches)
 
     def branch_for(self, obj_type: str, obj_id) -> Optional[PathReport]:
-        key = f"{obj_type}:{obj_id}"
+        """Первая ветка, где объект встречается на любом конце (legacy)."""
+        found = self.branches_for(obj_type, obj_id)
+        return found[0] if found else None
+
+    def resolved_direction(self) -> str:
+        """upstream|downstream из query или первой ветки. Иначе ValueError."""
+        d = ""
+        if self.query:
+            d = str(self.query.get("direction") or "")
+        if not d and self.branches:
+            d = str(self.branches[0].direction or "")
+        d = d.strip().lower()
+        if d not in ("upstream", "downstream"):
+            raise ValueError(
+                "MultiPathReport: не задано direction (upstream|downstream). "
+                "Передайте direction при calculate() или в query."
+            )
+        return d
+
+    def branches_for(
+        self,
+        obj_type: str,
+        obj_id,
+        *,
+        port: Optional[int] = None,
+        side: Optional[int] = None,
+    ) -> List[PathReport]:
+        """PathReport'ы, у которых конечная точка = заданный объект.
+
+        Направление MultiPathReport обязательно:
+          - upstream  — корень (OLT) в from_endpoint, ищем в **to_endpoint**
+          - downstream — корень в to_endpoint, ищем в **from_endpoint**
+
+        Примеры:
+          branches_for("cross", uuid, port=20)     → 0..1 ветка
+          branches_for("splitter", 49942)          → все порты сплиттера
+          branches_for("splitter", 49942, port=2)  → один выход
+          branches_for("customer", 62229)          → ветка до абонента
+        """
+        direction = self.resolved_direction()
+        oid = str(obj_id)
+        out: List[PathReport] = []
         for b in self.branches:
-            if b.from_endpoint and (
-                b.from_endpoint.obj_type == obj_type
-                and str(b.from_endpoint.obj_id) == str(obj_id)
-            ):
-                return b
-            if b.to_endpoint and (
-                b.to_endpoint.obj_type == obj_type
-                and str(b.to_endpoint.obj_id) == str(obj_id)
-            ):
-                return b
-            if key in (b.to_label or "") or key in (b.from_label or ""):
-                return b
-        return None
+            ep = b.to_endpoint if direction == "upstream" else b.from_endpoint
+            if ep is None:
+                continue
+            if str(ep.obj_type or "") != str(obj_type):
+                continue
+            if str(ep.obj_id) != oid:
+                continue
+            if port is not None:
+                if ep.port is None or int(ep.port) != int(port):
+                    continue
+            if side is not None:
+                if ep.side is None or int(ep.side) != int(side):
+                    continue
+            out.append(b)
+        return out
 
     def to_dict(self) -> dict:
         return {
