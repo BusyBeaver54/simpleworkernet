@@ -312,11 +312,29 @@ class Attenuation(
         # Иначе shortest path OLT→fiber leaf → PathReport из 1 сегмента.
         src_set = set(pair_sources)
         _prefer = frozenset({TYPE_CUSTOMER, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH, TYPE_OLT})
+        src_ids = set()
+        for s in pair_sources:
+            try:
+                src_ids.add(str(self.g.vs[s]["obj_id"]))
+            except Exception:
+                pass
+
+        def _ok_sink(v):
+            if v in src_set:
+                return False
+            try:
+                # не считать switch/olt с тем же id, что у источника
+                if str(self.g.vs[v]["obj_id"]) in src_ids:
+                    return False
+            except Exception:
+                pass
+            return True
+
         preferred = [
             v for v in ends
-            if v not in src_set and self.g.vs[v]["obj_type"] in _prefer
+            if _ok_sink(v) and self.g.vs[v]["obj_type"] in _prefer
         ]
-        pair_sinks = preferred if preferred else [v for v in ends if v not in src_set]
+        pair_sinks = preferred if preferred else [v for v in ends if _ok_sink(v)]
 
         if not pair_sources:
             pair_sources = ends[:1]
@@ -356,6 +374,8 @@ class Attenuation(
             raise AttenuationError("не удалось найти пути в CGraph для расчёта затуханий")
 
         collected = self._dedupe_paths_by_endpoints(collected)
+        if hasattr(self, "_filter_degenerate_paths"):
+            collected = self._filter_degenerate_paths(collected)
         if hasattr(self, "_drop_subpaths"):
             collected = self._drop_subpaths(collected)
         reports = [self._report_from_vpath(p, direction=direction) for p in collected]
