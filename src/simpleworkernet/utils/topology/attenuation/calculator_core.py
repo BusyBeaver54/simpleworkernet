@@ -14,7 +14,7 @@ from .models import AttenuationSegment, EndpointInfo, PathReport
 from .errors import AttenuationError
 from ..paths import simple_paths, shortest_simple_path
 
-
+# === calculator_segments.py ===
 _SPLITTER_IN_SIDE = 1
 _SPLITTER_OUT_SIDE = 2
 
@@ -1929,6 +1929,8 @@ class AttenuationPathsMixin:
                 f"нет пути в CGraph от {obj1_type}:{obj1_id}"
                 + (f" к {obj2_type}:{obj2_id}" if obj2_type else " к терминалу")
             )
+        collected = self._dedupe_paths_by_endpoints(collected)
+        collected = self._drop_subpaths(collected)
         return collected
 
     def _auto_targets(
@@ -2089,6 +2091,37 @@ class AttenuationGraphMixin:
                 out.append(chosen[1])
                 seen.add(key)
         return out
+
+    def _drop_subpaths(self, paths: List[List[int]]) -> List[List[int]]:
+        """Убрать пути, которые являются непрерывным подпутём более длинного.
+
+        Иначе MultiPathReport заполняется короткими ветками (1 сегмент fiber)
+        плюс полным путём: OLT→fiber side1→side2 как отдельный PathReport.
+        """
+        if not paths:
+            return []
+        ordered = sorted(
+            (p for p in paths if p and len(p) >= 2),
+            key=lambda p: (-len(p), tuple(p)),
+        )
+        kept_tups: List[tuple] = []
+        for p in ordered:
+            t = tuple(p)
+            is_sub = False
+            for kt in kept_tups:
+                if len(t) >= len(kt):
+                    continue
+                n = len(t)
+                for i in range(len(kt) - n + 1):
+                    if kt[i:i + n] == t:
+                        is_sub = True
+                        break
+                if is_sub:
+                    break
+            if not is_sub:
+                kept_tups.append(t)
+        kept_set = set(kept_tups)
+        return [p for p in paths if p and tuple(p) in kept_set]
 
     def _dedupe_device_vertices(self, indices: List[int]) -> List[int]:
         if self.g is None or not indices:
