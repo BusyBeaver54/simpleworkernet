@@ -588,7 +588,7 @@ class AttenuationPathFiberMixin:
         port = core.get("port")
         port_name = core.get("port_name")
         # att из WorkerNet (Fiber.get_fiber по id ОВ) — только meta, в расчёт не используем
-        wn_att = self._fetch_fiber_core_att(core.get("fiber_core_id"))
+        wn_att = None #self._fetch_fiber_core_att(core.get("fiber_core_id"))
         meta_base = {
             "cable_name": cable_name,
             "length_source": length_source,
