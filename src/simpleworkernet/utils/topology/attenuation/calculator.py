@@ -278,7 +278,7 @@ class Attenuation(
     def _calculate_full_cgraph(
         self, *, direction: Optional[str] = None, max_paths: Optional[int] = None,
     ) -> List[Any]:
-        """Затухания по всем значимым путям текущего CGraph."""
+        """Затухания от корня до каждой terminate_vertex (конец коммутации)."""
         if self.g is None or getattr(self.g, "vcount", lambda: 0)() == 0:
             raise AttenuationError("CGraph пуст — нечего считать")
 
@@ -308,10 +308,11 @@ class Attenuation(
                 self._vertices_of_types(_SINK_TYPES)
             )
 
-        # Цели: предпочтительно customer/ONU/radio/switch (не «голые» концы fiber).
-        # Иначе shortest path OLT→fiber leaf → PathReport из 1 сегмента.
+        # Цели = ВСЕ точки, где заканчивается коммутация (terminate_vertex):
+        # свободный порт кросса/сплиттера, customer, onu, «тупик» fiber и т.д.
+        # На каждую такую вершину — свой PathReport от корня (OLT/источник).
+        # Исключаем только сами источники и dual-type olt↔switch с тем же obj_id.
         src_set = set(pair_sources)
-        _prefer = frozenset({TYPE_CUSTOMER, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH, TYPE_OLT})
         src_ids = set()
         for s in pair_sources:
             try:
@@ -319,28 +320,26 @@ class Attenuation(
             except Exception:
                 pass
 
-        def _ok_sink(v):
+        def _ok_sink(v: int) -> bool:
             if v in src_set:
                 return False
             try:
-                # не считать switch/olt с тем же id, что у источника
-                if str(self.g.vs[v]["obj_id"]) in src_ids:
-                    return False
+                oid = str(self.g.vs[v]["obj_id"])
+                ot = self.g.vs[v]["obj_type"]
             except Exception:
-                pass
+                return True
+            # olt:101991 → switch:101991 (один аппарат) — не ветка
+            if oid in src_ids and ot in _SINK_TYPES:
+                return False
             return True
 
-        preferred = [
-            v for v in ends
-            if _ok_sink(v) and self.g.vs[v]["obj_type"] in _prefer
-        ]
-        pair_sinks = preferred if preferred else [v for v in ends if _ok_sink(v)]
+        pair_sinks = [v for v in ends if _ok_sink(v)]
 
         if not pair_sources:
             pair_sources = ends[:1]
-            pair_sinks = ends[1:]
+            pair_sinks = [v for v in ends[1:] if _ok_sink(v)]
         if not pair_sinks:
-            pair_sinks = [v for v in ends if v not in set(pair_sources)]
+            pair_sinks = [v for v in ends if v not in src_set]
 
         if not pair_sources or not pair_sinks:
             raise AttenuationError(
