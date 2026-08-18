@@ -308,9 +308,15 @@ class Attenuation(
                 self._vertices_of_types(_SINK_TYPES)
             )
 
-        # Цели — все остальные конечные точки (fiber/splitter/cross/customer/…)
+        # Цели: предпочтительно customer/ONU/radio/switch (не «голые» концы fiber).
+        # Иначе shortest path OLT→fiber leaf → PathReport из 1 сегмента.
         src_set = set(pair_sources)
-        pair_sinks = [v for v in ends if v not in src_set]
+        _prefer = frozenset({TYPE_CUSTOMER, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH, TYPE_OLT})
+        preferred = [
+            v for v in ends
+            if v not in src_set and self.g.vs[v]["obj_type"] in _prefer
+        ]
+        pair_sinks = preferred if preferred else [v for v in ends if v not in src_set]
 
         if not pair_sources:
             pair_sources = ends[:1]
@@ -350,6 +356,8 @@ class Attenuation(
             raise AttenuationError("не удалось найти пути в CGraph для расчёта затуханий")
 
         collected = self._dedupe_paths_by_endpoints(collected)
+        if hasattr(self, "_drop_subpaths"):
+            collected = self._drop_subpaths(collected)
         reports = [self._report_from_vpath(p, direction=direction) for p in collected]
         return MultiPathReport(
             branches=reports,
