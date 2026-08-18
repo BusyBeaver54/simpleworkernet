@@ -1930,6 +1930,7 @@ class AttenuationPathsMixin:
                 + (f" к {obj2_type}:{obj2_id}" if obj2_type else " к терминалу")
             )
         collected = self._dedupe_paths_by_endpoints(collected)
+        collected = self._filter_degenerate_paths(collected)
         collected = self._drop_subpaths(collected)
         return collected
 
@@ -2090,6 +2091,41 @@ class AttenuationGraphMixin:
             if chosen is not None:
                 out.append(chosen[1])
                 seen.add(key)
+        return out
+
+    def _is_same_device_endpoints(self, path: List[int]) -> bool:
+        """True если концы пути — один и тот же аппарат под разными TYPE (olt/switch).
+
+        WorkerNet/CGraph часто дублирует OLT как switch с тем же obj_id.
+        Путь olt:ID → switch:ID даёт PathReport из одного adapter на кроссе OLT.
+        """
+        if self.g is None or not path or len(path) < 2:
+            return False
+        try:
+            a = self.g.vs[path[0]]
+            b = self.g.vs[path[-1]]
+            ida, idb = str(a["obj_id"]), str(b["obj_id"])
+            if not ida or ida != idb:
+                return False
+            ta, tb = a["obj_type"], b["obj_type"]
+            if ta == tb:
+                # тот же тип+id — бессмысленный «путь в себя»
+                return True
+            # olt↔switch / onu↔… с одним id
+            deviceish = {TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO}
+            return ta in deviceish and tb in deviceish
+        except Exception:
+            return False
+
+    def _filter_degenerate_paths(self, paths: List[List[int]]) -> List[List[int]]:
+        """Убрать пути olt↔switch с одним id и прочий мусор."""
+        out = []
+        for p in paths:
+            if not p or len(p) < 2:
+                continue
+            if self._is_same_device_endpoints(p):
+                continue
+            out.append(p)
         return out
 
     def _drop_subpaths(self, paths: List[List[int]]) -> List[List[int]]:
