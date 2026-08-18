@@ -997,6 +997,10 @@ class AttenuationPathMixin(AttenuationPathFiberMixin):
             ))
         segs = self._dedupe_cross_adapters(segs)
         self._stamp_node_ids(segs, vpath)
+        d_norm = (direction or "").strip().lower()
+        if d_norm in ("upstream", "downstream"):
+            for s in segs:
+                s.direction = d_norm
         total = sum(s.db for s in segs)
         total_min = sum((s.db_min if s.db_min is not None else s.db) for s in segs)
         total_max = sum((s.db_max if s.db_max is not None else s.db) for s in segs)
@@ -1172,6 +1176,64 @@ class AttenuationEdgeMixin:
             parts.append(f"host={host}")
         return " ".join(parts)
 
+    def _iface_ref(self, vattrs: dict) -> str:
+        """Короткий ярлык интерфейса для description: fiber:123 m1f2, splitter:9 p1In."""
+        if not vattrs:
+            return "?"
+        ot = str(vattrs.get("obj_type") or "?")
+        oid = str(vattrs.get("obj_id") or "?")
+        side = vattrs.get("side")
+        port = vattrs.get("port")
+        try:
+            side_i = int(side) if side is not None else None
+        except (TypeError, ValueError):
+            side_i = None
+        try:
+            port_i = int(port) if port is not None else None
+        except (TypeError, ValueError):
+            port_i = None
+
+        if ot == TYPE_FIBER:
+            # mf_path / module+number если уже резолвили в meta сегмента нет — из attrs
+            mf = vattrs.get("mf_path")
+            if not mf and port_i is not None:
+                mod = vattrs.get("module_number") or vattrs.get("module")
+                if mod is not None:
+                    try:
+                        mf = f"m{int(mod)}f{port_i}"
+                    except (TypeError, ValueError):
+                        mf = f"f{port_i}"
+                else:
+                    mf = f"f{port_i}"
+            return f"fiber:{oid} {mf}".strip() if mf else f"fiber:{oid}"
+
+        if ot == TYPE_SPLITTER:
+            if port_i is None:
+                return f"splitter:{oid}"
+            if side_i == 1:
+                return f"splitter:{oid} p{port_i}In"
+            if side_i == 2:
+                return f"splitter:{oid} p{port_i}Out"
+            return f"splitter:{oid} p{port_i}"
+
+        if ot == TYPE_CROSS:
+            if port_i is not None:
+                return f"cross:{oid} p{port_i}"
+            return f"cross:{oid}"
+
+        if ot == TYPE_CUSTOMER:
+            return f"customer:{oid}"
+
+        if ot in (TYPE_OLT, TYPE_SWITCH, TYPE_ONU, TYPE_RADIO):
+            if port_i is not None:
+                return f"{ot}:{oid} p{port_i}"
+            return f"{ot}:{oid}"
+
+        base = f"{ot}:{oid}"
+        if port_i is not None:
+            base += f" p{port_i}"
+        return base
+
     def _external_joint_segments(
         self, ua: dict, va: dict, *, connect_id=None,
         path_endpoints: Optional[set] = None,
@@ -1191,11 +1253,10 @@ class AttenuationEdgeMixin:
             else:
                 db = self.catalog.splice_db(use_max=self.use_max)
                 db_min = db_max = db
-            na = _obj_display_name(ua) or ida
-            nb = _obj_display_name(va) or idb
+            ra, rb = self._iface_ref(ua), self._iface_ref(va)
             return [AttenuationSegment(
                 kind="splice", db=db, db_min=db_min, db_max=db_max,
-                description=f"splice splitter {na} ↔ {nb}",
+                description=f"splice from {ra} to {rb}",
                 source="default", wavelength_nm=self.wavelength, meta=meta,
             )]
 
@@ -1251,7 +1312,7 @@ class AttenuationEdgeMixin:
                 db_min = db_max = db
             return [AttenuationSegment(
                 kind="splice", db=db, db_min=db_min, db_max=db_max,
-                description="splice at fiber joint",
+                description=f"splice from {self._iface_ref(ua)} to {self._iface_ref(va)}",
                 source="default", wavelength_nm=self.wavelength, meta=meta,
             )]
 
@@ -1260,11 +1321,9 @@ class AttenuationEdgeMixin:
         else:
             db = self.catalog.splice_db(use_max=self.use_max)
             db_min = db_max = db
-        la = self._terminal_label(ua)
-        lb = self._terminal_label(va)
         return [AttenuationSegment(
             kind="splice", db=db, db_min=db_min, db_max=db_max,
-            description=f"splice {la} ↔ {lb}",
+            description=f"splice from {self._iface_ref(ua)} to {self._iface_ref(va)}",
             source="default", wavelength_nm=self.wavelength, meta=meta,
         )]
 
