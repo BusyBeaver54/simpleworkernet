@@ -3,37 +3,18 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional, Sequence, Tuple, Union, List, Set
 from ..constants import (
     TYPE_CUSTOMER, TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SPLITTER, TYPE_SWITCH,
     TYPE_FIBER, TYPE_CROSS,
 )
 from .length import resolve_fiber_length_m
 from . import splitter_load
-from typing import Any, List, Optional
-from ..constants import TYPE_FIBER
-from .models import AttenuationSegment
-from ..constants import (
-    TYPE_CUSTOMER, TYPE_FIBER, TYPE_OLT, TYPE_SPLITTER,
-    TYPE_SWITCH, TYPE_ONU, TYPE_RADIO,
-)
 from .models import AttenuationSegment, EndpointInfo, PathReport
-from typing import List, Optional, Set
-from ..constants import (
-    TYPE_CROSS, TYPE_CUSTOMER, TYPE_FIBER, TYPE_OLT, TYPE_ONU,
-    TYPE_RADIO, TYPE_SPLITTER, TYPE_SWITCH,
-)
-from typing import Any, Optional, Union
 from .errors import AttenuationError
-from typing import Any, Set
-from typing import Any, List, Optional, Set
-from typing import List, Optional
 from ..paths import simple_paths, shortest_simple_path
-from ..constants import TYPE_OLT, TYPE_ONU, TYPE_RADIO, TYPE_SWITCH
-from typing import Any, List, Optional, Union
-from .models import PathReport
 
-# === calculator_segments.py ===
+
 _SPLITTER_IN_SIDE = 1
 _SPLITTER_OUT_SIDE = 2
 
