@@ -114,6 +114,8 @@ class AttenuationSegment:
     path_db: Optional[float] = None
     path_db_min: Optional[float] = None
     path_db_max: Optional[float] = None
+    # upstream / downstream — то же, что у PathReport (ориентация пути)
+    direction: str = ""
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self):
@@ -149,6 +151,7 @@ class AttenuationSegment:
             "length_source": self.length_source,
             "wavelength_nm": self.wavelength_nm,
             "source": self.source,
+            "direction": self.direction or "",
             "meta": self.meta,
         }
 
@@ -175,6 +178,7 @@ class AttenuationSegment:
             path_db=float(d["path_db"]) if d.get("path_db") is not None else None,
             path_db_min=float(d["path_db_min"]) if d.get("path_db_min") is not None else None,
             path_db_max=float(d["path_db_max"]) if d.get("path_db_max") is not None else None,
+            direction=str(d.get("direction") or ""),
             meta=dict(d.get("meta") or {}),
         )
 
