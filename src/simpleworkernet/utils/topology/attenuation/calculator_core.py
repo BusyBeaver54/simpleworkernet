@@ -13,6 +13,7 @@ from . import splitter_load
 from .models import AttenuationSegment, EndpointInfo, PathReport
 from .errors import AttenuationError
 from ..paths import simple_paths, shortest_simple_path
+from .calculator_pairs import pair_plan, validate_pair_inputs, PairPlan
 
 # === calculator_segments.py ===
 _SPLITTER_IN_SIDE = 1
