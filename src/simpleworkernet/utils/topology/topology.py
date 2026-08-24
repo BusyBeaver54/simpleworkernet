@@ -79,15 +79,40 @@ class NetworkTopologyBuildMixin:
                 if p > 0:
                     ports.add(p)
             for p in ports:
+                if side is None:
+                    for s in (1, 2):
+                        self._attach(self._build_cgraph(
+                            TYPE_CROSS, object_id, port=p, side=s,
+                            included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+                        ))
+                else:
+                    try:
+                        s0 = int(side)
+                    except (TypeError, ValueError):
+                        s0 = 1
+                    opp = 2 if s0 == 1 else 1
+                    self._attach(self._build_cgraph(
+                        TYPE_CROSS, object_id, port=p, side=opp,
+                        included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+                    ))
+            return self._finalize_build()
+        # port задан
+        if side is None:
+            for s in (1, 2):
                 self._attach(self._build_cgraph(
-                    TYPE_CROSS, object_id, port=p, side=None,
+                    TYPE_CROSS, object_id, port=port, side=s,
                     included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
                 ))
-            return self._finalize_build()
-        self._attach(self._build_cgraph(
-            TYPE_CROSS, object_id, port=port, side=side,
-            included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
-        ))
+        else:
+            try:
+                s0 = int(side)
+            except (TypeError, ValueError):
+                s0 = 1
+            opp = 2 if s0 == 1 else 1
+            self._attach(self._build_cgraph(
+                TYPE_CROSS, object_id, port=port, side=opp,
+                included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+            ))
         return self._finalize_build()
 
     def build_from_splitter(
@@ -174,14 +199,36 @@ class NetworkTopologyBuildMixin:
         self, object_id: int, port=None, side: Optional[int] = None,
         included_fibers=None, excluded_fibers=None, excluded_nodes=None,
     ) -> "NetworkTopology":
+        """
+        Кабель/волокно.
+        - side is None → строим от обеих сторон (side=1 и side=2), графы объединяются.
+        - side задан → строим в противоположную сторону (от выбранного конца наружу).
+        - port is None → все ОВ кабеля (через expand в _build_cgraph / стартовые Interface).
+        """
         self._reset()
         self.logger.info(f"=== BUILD FROM FIBER: cable={object_id}, port={port}, side={side} ===")
-        self._attach(self._build_cgraph(
-            TYPE_FIBER, object_id, port=port, side=side,
-            included_fibers=_normalize_set(included_fibers),
-            excluded_fibers=_normalize_set(excluded_fibers),
-            excluded_nodes=_normalize_set(excluded_nodes),
-        ))
+        inc = _normalize_set(included_fibers)
+        exc_f = _normalize_set(excluded_fibers)
+        exc_n = _normalize_set(excluded_nodes)
+
+        def _attach_side(s):
+            self._attach(self._build_cgraph(
+                TYPE_FIBER, object_id, port=port, side=s,
+                included_fibers=inc, excluded_fibers=exc_f, excluded_nodes=exc_n,
+            ))
+
+        if side is None:
+            for s in (1, 2):
+                _attach_side(s)
+        else:
+            try:
+                s0 = int(side)
+            except (TypeError, ValueError):
+                s0 = 1
+            # выбранная сторона — «где стоим»; строим в противоположную
+            opp = 2 if s0 == 1 else 1
+            self.logger.info(f"FIBER side={s0} → build opposite side={opp}")
+            _attach_side(opp)
         return self._finalize_build()
 
     def build_from_node(
