@@ -57,18 +57,20 @@ class Attenuation(
 ):
     def __init__(
         self,
-        graph: Any = None,
+        indata: Any = None,
         *,
         catalog: Optional[AttenuationCatalog] = None,
         wavelength: int = 1550,
         cache: Any = None,
         client: Any = None,
+        # устаревшие алиасы (совместимость)
+        graph: Any = None,
         cgraph: Any = None,
         topology: Any = None,
     ) -> None:
-        """graph — CGraph или NetworkTopology (единственный входной граф).
+        """indata — NetworkTopology или CGraph (единственный входной граф).
 
-        cgraph=/topology= оставлены как алиасы graph= для совместимости.
+        graph=/cgraph=/topology= — устаревшие алиасы indata= (не используйте в новом коде).
         """
         self.topology: Any = None
         self.cgraphs: List[Any] = []
@@ -77,7 +79,9 @@ class Attenuation(
         self.wavelength = int(wavelength)
         self.use_max = False
 
-        src = graph if graph is not None else (topology if topology is not None else cgraph)
+        src = indata
+        if src is None:
+            src = graph if graph is not None else (topology if topology is not None else cgraph)
         self._bind_graphs(
             cgraph=None if _is_network_topology(src) else src,
             topology=src if _is_network_topology(src) else None,

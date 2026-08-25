@@ -285,8 +285,52 @@ class CatalogCoreMixin:
             return 0.2, 0.2, 0.2
         return picked[0], picked[1], picked[2]
 
-    def splice_db(self, *, use_max=False, use_min=False):
-        t = _as_db_triple(self.defaults.get("splice_db", 0.05))
+
+    def set_default_wavelength(
+        self, wavelength_nm: int, *, fiber_db=None, splice_db=None,
+        connector_db=None, adapter_db=None,
+    ) -> None:
+        """Добавить/обновить значения для произвольной длины волны в defaults.
+
+        fiber_db / splice_db / connector_db / adapter_db — число или
+        {db_min, db, db_max}. Отсутствующие блоки не трогаются.
+        """
+        wl = _wl_key(wavelength_nm)
+        if fiber_db is not None:
+            table = self.defaults.setdefault("fiber_db_per_km", {})
+            t = _as_db_triple(fiber_db)
+            if t:
+                table[wl] = {"db_min": t[0], "db": t[1], "db_max": t[2]}
+        for key, val in (
+            ("splice_db", splice_db),
+            ("connector_db", connector_db),
+            ("adapter_db", adapter_db),
+        ):
+            if val is None:
+                continue
+            cur = self.defaults.get(key)
+            t = _as_db_triple(val)
+            if t is None:
+                continue
+            entry = {"db_min": t[0], "db": t[1], "db_max": t[2]}
+            # promote flat → table if needed
+            if cur is None or not isinstance(cur, dict) or any(k in cur for k in ("db", "db_min", "db_max")):
+                # was flat triple → convert
+                base = _as_db_triple(cur) if cur is not None else t
+                table = {}
+                if base:
+                    for default_wl in ("1270", "1310", "1490", "1550", "1610"):
+                        table[default_wl] = {
+                            "db_min": base[0], "db": base[1], "db_max": base[2],
+                        }
+                table[wl] = entry
+                self.defaults[key] = table
+            else:
+                cur[wl] = entry
+
+
+    def splice_db(self, wavelength_nm: Optional[int] = None, *, use_max=False, use_min=False):
+        t = _joint_table_or_triple(self.defaults.get("splice_db", 0.05), wavelength_nm)
         if not t:
             return 0.05
         if use_min:
@@ -295,12 +339,12 @@ class CatalogCoreMixin:
             return t[2]
         return t[1]
 
-    def splice_db_triple(self):
-        t = _as_db_triple(self.defaults.get("splice_db", 0.05))
+    def splice_db_triple(self, wavelength_nm: Optional[int] = None):
+        t = _joint_table_or_triple(self.defaults.get("splice_db", 0.05), wavelength_nm)
         return t if t else (0.05, 0.05, 0.05)
 
-    def connector_db(self, *, use_max=False, use_min=False):
-        t = _as_db_triple(self.defaults.get("connector_db", 0.15))
+    def connector_db(self, wavelength_nm: Optional[int] = None, *, use_max=False, use_min=False):
+        t = _joint_table_or_triple(self.defaults.get("connector_db", 0.15), wavelength_nm)
         if not t:
             return 0.15
         if use_min:
@@ -309,11 +353,11 @@ class CatalogCoreMixin:
             return t[2]
         return t[1]
 
-    def connector_db_triple(self):
-        t = _as_db_triple(self.defaults.get("connector_db", 0.15))
+    def connector_db_triple(self, wavelength_nm: Optional[int] = None):
+        t = _joint_table_or_triple(self.defaults.get("connector_db", 0.15), wavelength_nm)
         return t if t else (0.15, 0.15, 0.15)
 
-    def adapter_db(self, adapter_type=None, *, use_max=False, use_min=False):
+    def adapter_db(self, adapter_type=None, wavelength_nm: Optional[int] = None, *, use_max=False, use_min=False):
         adapters = self._data.get("cross_adapters") or {}
         raw = None
         if adapter_type:
@@ -324,7 +368,7 @@ class CatalogCoreMixin:
             raw = adapters.get("default")
         if raw is None:
             raw = 0.3
-        t = _as_db_triple(raw)
+        t = _joint_table_or_triple(raw, wavelength_nm)
         if not t:
             return 0.3
         if use_min:
@@ -333,7 +377,7 @@ class CatalogCoreMixin:
             return t[2]
         return t[1]
 
-    def adapter_db_triple(self, adapter_type=None):
+    def adapter_db_triple(self, adapter_type=None, wavelength_nm: Optional[int] = None):
         adapters = self._data.get("cross_adapters") or {}
         raw = None
         if adapter_type:
@@ -344,15 +388,35 @@ class CatalogCoreMixin:
             raw = adapters.get("default")
         if raw is None:
             raw = 0.3
-        t = _as_db_triple(raw)
+        t = _joint_table_or_triple(raw, wavelength_nm)
         return t if t else (0.3, 0.3, 0.3)
 
     def cross_loss_mode(self) -> str:
         mode = self.defaults.get("cross_loss_mode", "adapter")
         return mode if mode in ("adapter", "connectors") else "adapter"
 
-    def geo_slack_k(self):
+    def geo_slack_k(self, cabletype_id=None, *, name=None):
+        """Коэффициент удлинения кабеля.
+
+        Если для кабеля не задан — defaults.geo_slack_k (по умолчанию 1.03).
+        """
+        if cabletype_id is not None or name is not None:
+            entry = self._find_cable(cabletype_id=cabletype_id, name=name)
+            if entry is not None and entry.get("geo_slack_k") is not None:
+                try:
+                    return float(entry["geo_slack_k"])
+                except (TypeError, ValueError):
+                    pass
         return float(self.defaults.get("geo_slack_k", 1.03))
+
+    def cable_manufacturer(self, cabletype_id=None, *, name=None) -> Optional[str]:
+        entry = self._find_cable(cabletype_id=cabletype_id, name=name)
+        if not entry:
+            return None
+        m = entry.get("manufacturer") or entry.get("vendor") or entry.get("brand")
+        if m is None or m == "":
+            return None
+        return str(m).strip()
 
     def splitter_excess_db(self):
         return float(self.defaults.get("splitter_excess_db", 0.5))
@@ -375,7 +439,16 @@ class CatalogCoreMixin:
                 return entry
         return None
 
-    def set_cable(self, cabletype_id=None, *, name="", db_per_km=None):
+    def set_cable(
+        self, cabletype_id=None, *, name="", manufacturer=None,
+        geo_slack_k=None, db_per_km=None,
+    ):
+        """Добавить/обновить кабель.
+
+        manufacturer — производитель (марка/бренд).
+        geo_slack_k — коэффициент удлинения (если None, берётся defaults.geo_slack_k).
+        db_per_km — {wavelength: db|{db_min,db,db_max}, ...}; любая λ допустима.
+        """
         entry = self._find_cable(cabletype_id=cabletype_id, name=name if not cabletype_id else None)
         if entry is None:
             entry = {}
@@ -388,6 +461,10 @@ class CatalogCoreMixin:
             entry["name"] = name
         if cabletype_id is not None:
             entry["id"] = str(cabletype_id)
+        if manufacturer is not None:
+            entry["manufacturer"] = str(manufacturer).strip() or None
+        if geo_slack_k is not None:
+            entry["geo_slack_k"] = float(geo_slack_k)
         if db_per_km is not None:
             norm = {}
             for k, v in db_per_km.items():
@@ -1000,6 +1077,37 @@ class CatalogIOMixin:
         """Alias для save."""
         return self.save(path)
 
+
+
+def _joint_table_or_triple(raw: Any, wavelength_nm: Optional[int] = None):
+    """raw: число | {db/db_min/db_max} | {"1310": {...}, "1550": {...}}.
+
+    Возвращает (db_min, db, db_max) с учётом wavelength_nm.
+    """
+    if raw is None:
+        return None
+    # per-wavelength table?
+    if isinstance(raw, dict):
+        keys = list(raw.keys())
+        looks_wl = False
+        for k in keys:
+            ks = str(k)
+            if ks.isdigit() or (isinstance(k, int)):
+                looks_wl = True
+                break
+            # also accept nested without db keys at top
+        if looks_wl and not any(k in raw for k in ("db", "db_min", "db_max")):
+            if wavelength_nm is not None:
+                picked = _pick_wl(raw, int(wavelength_nm), context="joint")
+                if picked is not None:
+                    return picked[0], picked[1], picked[2]
+            # fallback: first available wavelength
+            for k in sorted(keys, key=lambda x: str(x)):
+                t = _as_db_triple(raw[k])
+                if t:
+                    return t
+            return None
+    return _as_db_triple(raw)
 
 class AttenuationCatalog(
     CatalogCoreMixin,
