@@ -9,6 +9,7 @@
 """
 
 from ..constants import (  # noqa: F401
+    TYPE_NODE,
     TYPE_CUSTOMER,
     TYPE_FIBER,
     TYPE_SPLITTER,
@@ -25,6 +26,7 @@ from ..constants import (  # noqa: F401
 )
 
 __all__ = [
+    "TYPE_NODE",
     "TYPE_CUSTOMER",
     "TYPE_FIBER",
     "TYPE_SPLITTER",

@@ -9,6 +9,7 @@
 
 from typing import Set
 
+TYPE_NODE = "node"
 TYPE_CUSTOMER = "customer"
 TYPE_FIBER = "fiber"
 TYPE_SPLITTER = "splitter"
@@ -23,4 +24,11 @@ DEVICE_TYPES: Set[str] = {TYPE_SWITCH, TYPE_OLT, TYPE_ONU, TYPE_RADIO}
 SIDE_TYPES: Set[str] = {TYPE_CROSS, TYPE_FIBER, TYPE_SPLITTER, TYPE_CWDM}
 TERMINAL_TYPES: Set[str] = {TYPE_CUSTOMER} | DEVICE_TYPES
 
-ALL_OBJECT_TYPES: Set[str] = SIDE_TYPES | TERMINAL_TYPES
+ALL_OBJECT_TYPES: Set[str] = SIDE_TYPES | TERMINAL_TYPES | {TYPE_NODE}
+
+# дополнительные bulk-категории (не топология, но SmartData-списки)
+EXTRA_BULK_TYPES: Set[str] = {
+    "owner", "inventory", "inventory_catalog", "tariff", "employee",
+    "vlan", "key", "map", "city", "address_building",
+}
+ALL_BULK_TYPES: Set[str] = ALL_OBJECT_TYPES | EXTRA_BULK_TYPES | {"device", "node"}

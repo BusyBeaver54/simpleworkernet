@@ -23,6 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from ...core.client import WorkerNetClient
 from .constants import (
     DEVICE_TYPES,
+    TYPE_NODE,
     TYPE_CROSS,
     TYPE_CUSTOMER,
     TYPE_CWDM,
@@ -31,6 +32,7 @@ from .constants import (
     TYPE_SPLITTER,
     TYPE_SWITCH,
     TYPE_RADIO,
+    TYPE_ONU,
 )
 
 _logger = None
@@ -147,6 +149,7 @@ class DataCache:
         self._fiber_lengths: Dict[Union[int, str], Tuple[Optional[float], str]] = {}
         self._geo_lengths: Dict[int, Optional[float]] = {}
         self._cable_catalog: Optional[List[Any]] = None
+        self._field_index: Dict[Tuple[str, str], Dict[Any, List[Any]]] = {}
 
         self._lock = threading.RLock()
         # Короткие критические секции вокруг одного HTTP-вызова.
@@ -220,8 +223,180 @@ class DataCache:
                     if inferred:
                         self._objects[(inferred, oid)] = obj
                     elif obj_type in DEVICE_TYPES:
-                        # явный тип при записи важнее, чем отсутствие поля в api_obj
                         self._objects[(obj_type, oid)] = obj
+            self._index_object_fields(obj_type, obj)
+
+    _INDEX_FIELDS = (
+        "node_id", "building_id", "parent_id",
+        "node1_id", "node2_id", "node_a_id", "node_b_id",
+        "object_a_id", "object_b_id",
+        "customer_id", "owner_id",
+        "cable_line_type_id", "object_type",
+        "code", "number",
+    )
+
+    def _index_object_fields(self, obj_type: str, obj: Any) -> None:
+        if obj is None:
+            return
+        for field in self._INDEX_FIELDS:
+            val = obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
+            if val is None or val == "":
+                continue
+            bucket = self._field_index.setdefault((obj_type, field), {})
+            keys = [val]
+            try:
+                if isinstance(val, str) and str(val).isdigit():
+                    keys.append(int(val))
+                elif isinstance(val, int):
+                    keys.append(str(val))
+            except Exception:
+                pass
+            for k in keys:
+                lst = bucket.setdefault(k, [])
+                if obj not in lst:
+                    lst.append(obj)
+
+    def rebuild_field_index(self, object_type: Optional[str] = None) -> None:
+        with self._lock:
+            if object_type is None:
+                self._field_index.clear()
+                types = list(self._all_objects.keys())
+            else:
+                for key in list(self._field_index.keys()):
+                    if key[0] == object_type:
+                        del self._field_index[key]
+                types = [object_type]
+            for ot in types:
+                bulk = self._all_objects.get(ot) or {}
+                seen = set()
+                for _oid, obj in bulk.items():
+                    iid = id(obj)
+                    if iid in seen:
+                        continue
+                    seen.add(iid)
+                    self._index_object_fields(ot, obj)
+
+    def filter_objects(
+        self,
+        object_type: str,
+        *,
+        ensure_loaded: bool = False,
+        client: Optional[WorkerNetClient] = None,
+        **filters: Any,
+    ) -> List[Any]:
+        ot = (object_type or "").strip().lower()
+        if ensure_loaded and client is not None:
+            try:
+                self.ensure_type_loaded(client, ot)
+            except Exception:
+                pass
+        if len(filters) == 1:
+            field, value = next(iter(filters.items()))
+            if field in self._INDEX_FIELDS:
+                with self._lock:
+                    bucket = self._field_index.get((ot, field), {})
+                    items = list(bucket.get(value, []))
+                    if not items and isinstance(value, int):
+                        items = list(bucket.get(str(value), []))
+                    elif not items and isinstance(value, str) and value.isdigit():
+                        try:
+                            items = list(bucket.get(int(value), []))
+                        except Exception:
+                            pass
+                if items:
+                    return items
+        with self._lock:
+            bulk = dict(self._all_objects.get(ot) or {})
+        seen_ids = set()
+        objects: List[Any] = []
+        for oid, obj in bulk.items():
+            eid = _extract_obj_id(obj) or oid
+            key = (ot, eid)
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            objects.append(obj)
+        if not filters:
+            return objects
+        try:
+            from ...smartdata import SmartData
+            sd = SmartData(objects)
+            for field, value in filters.items():
+                sd = sd.where(field, value)
+            return list(sd.to_list() or [])
+        except Exception:
+            pass
+        out = []
+        for obj in objects:
+            ok = True
+            for field, value in filters.items():
+                actual = obj.get(field) if isinstance(obj, dict) else getattr(obj, field, None)
+                if actual != value and str(actual) != str(value):
+                    ok = False
+                    break
+            if ok:
+                out.append(obj)
+        return out
+
+    def objects_at_node(
+        self,
+        node_id: Union[int, str],
+        object_types: Optional[Sequence[str]] = None,
+        *,
+        client: Optional[WorkerNetClient] = None,
+        ensure_loaded: bool = False,
+    ) -> Dict[str, List[Any]]:
+        types = list(object_types) if object_types else [
+            TYPE_FIBER, TYPE_SPLITTER, TYPE_CROSS, TYPE_CWDM,
+            "device", TYPE_OLT, TYPE_SWITCH, TYPE_RADIO, TYPE_NODE,
+        ]
+        result: Dict[str, List[Any]] = {}
+        for ot in types:
+            if ensure_loaded and client is not None:
+                try:
+                    self.ensure_type_loaded(client, ot)
+                except Exception:
+                    pass
+            found: List[Any] = []
+            seen = set()
+            for field in ("node_id", "building_id", "node1_id", "node2_id", "parent_id"):
+                for obj in self.filter_objects(ot, **{field: node_id}):
+                    oid = _extract_obj_id(obj)
+                    key = oid if oid is not None else id(obj)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    found.append(obj)
+            if found:
+                result[ot] = found
+        return result
+
+    def ensure_type_loaded(self, client: WorkerNetClient, object_type: str) -> None:
+        ot = (object_type or "").strip().lower()
+        with self._lock:
+            if ot in self._all_objects and self._all_objects[ot]:
+                return
+            if ot in DEVICE_TYPES and (self._all_objects.get(ot) or self._all_objects.get("device")):
+                return
+        jobs = self._all_bulk_jobs(client)
+        fn = jobs.get(ot)
+        if fn is None and ot in DEVICE_TYPES:
+            fn = jobs.get("device")
+        if fn is not None:
+            fn()
+            self.rebuild_field_index(ot if ot not in DEVICE_TYPES else None)
+
+    def query(
+        self,
+        object_type: str,
+        client: Optional[WorkerNetClient] = None,
+        *,
+        ensure_loaded: bool = True,
+        **filters: Any,
+    ) -> List[Any]:
+        return self.filter_objects(
+            object_type, ensure_loaded=ensure_loaded, client=client, **filters,
+        )
 
     def get_or_load_object(
         self, obj_type: str, obj_id: Union[int, str], loader: Callable[[], Any],
@@ -354,6 +529,13 @@ class DataCache:
             default_types = list(config_manager.preload_types)
             default_customers = bool(config_manager.preload_customers)
             default_workers = int(config_manager.preload_workers)
+            # если в конфиге пусто — грузим полный набор bulk-категорий
+            if not default_types:
+                default_types = [
+                    "node", "fiber", "device", "splitter", "cross", "cwdm",
+                    "customer", "owner", "inventory", "tariff", "employee",
+                    "vlan", "key", "map", "city",
+                ]
         except Exception:
             default_types = ["node", "device", "splitter", "cross", "cwdm", "fiber"]
             default_customers = False
@@ -366,23 +548,27 @@ class DataCache:
             types = list(types) + ["customer"]
         n_workers = workers if workers is not None else default_workers
         n_workers = max(1, min(int(n_workers), max(1, len(list(types)))))
-        jobs: Dict[str, Callable[[], Any]] = {
-            "node": lambda: self.get_all_nodes(client),
-            "device": lambda: self.get_all_devices(client),
-            "splitter": lambda: self.get_all_splitters(client),
-            "cross": lambda: self.get_all_crosses(client),
-            "cwdm": lambda: self.get_all_cwdms(client),
-            "fiber": lambda: self.get_all_fibers(client),
-            "customer": lambda: self.get_all_customers(client),
-        }
+        jobs = self._all_bulk_jobs(client)
         cache_keys = {
-            "node": ["node"],
-            "device": ["device", *sorted(DEVICE_TYPES)],
+            "node": [TYPE_NODE, "node"],
+            "device": ["device", *sorted(DEVICE_TYPES - {TYPE_ONU})],
+            "olt": [TYPE_OLT, "device"],
+            "switch": [TYPE_SWITCH, "device"],
+            "radio": [TYPE_RADIO, "device"],
             "splitter": [TYPE_SPLITTER],
             "cross": [TYPE_CROSS],
             "cwdm": [TYPE_CWDM],
             "fiber": [TYPE_FIBER],
             "customer": [TYPE_CUSTOMER],
+            "owner": ["owner"],
+            "inventory": ["inventory"],
+            "inventory_catalog": ["inventory_catalog"],
+            "tariff": ["tariff"],
+            "employee": ["employee"],
+            "vlan": ["vlan"],
+            "key": ["key"],
+            "map": ["map"],
+            "city": ["city"],
         }
         if self._preload_executor is None:
             self._preload_executor = ThreadPoolExecutor(
@@ -531,6 +717,71 @@ class DataCache:
             self._cable_catalog = []
         return self._cable_catalog
 
+    def _all_bulk_jobs(self, client: WorkerNetClient) -> Dict[str, Callable[[], Any]]:
+        """Все bulk-загрузчики категорий (SmartData-списки без обязательных id)."""
+        return {
+            "node": lambda: self.get_all_nodes(client),
+            "device": lambda: self.get_all_devices(client),
+            "olt": lambda: self.get_all_devices(client, types=[TYPE_OLT]),
+            "switch": lambda: self.get_all_devices(client, types=[TYPE_SWITCH]),
+            "radio": lambda: self.get_all_devices(client, types=[TYPE_RADIO]),
+            "splitter": lambda: self.get_all_splitters(client),
+            "cross": lambda: self.get_all_crosses(client),
+            "cwdm": lambda: self.get_all_cwdms(client),
+            "fiber": lambda: self.get_all_fibers(client),
+            "customer": lambda: self.get_all_customers(client),
+            "owner": lambda: self.get_all_owners(client),
+            "inventory": lambda: self.get_all_inventory(client),
+            "inventory_catalog": lambda: self.get_all_inventory_catalog(client),
+            "tariff": lambda: self.get_all_tariffs(client),
+            "employee": lambda: self.get_all_employees(client),
+            "vlan": lambda: self.get_all_vlans(client),
+            "key": lambda: self.get_all_keys(client),
+            "map": lambda: self.get_all_maps(client),
+            "city": lambda: self.get_all_cities(client),
+        }
+
+    def get_all_owners(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects("owner", lambda: client.Owner.get())
+
+    def get_all_inventory(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects(
+            "inventory",
+            lambda: client.Inventory.get_inventory(),
+        )
+
+    def get_all_inventory_catalog(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects(
+            "inventory_catalog",
+            lambda: client.Inventory.get_inventory_catalog(),
+        )
+
+    def get_all_tariffs(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects("tariff", lambda: client.Tariff.get())
+
+    def get_all_employees(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects("employee", lambda: client.Employee.get_data())
+
+    def get_all_vlans(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects("vlan", lambda: client.Vlan.get_list())
+
+    def get_all_keys(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects("key", lambda: client.Key.get_list())
+
+    def get_all_maps(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        return self.get_all_objects("map", lambda: client.Map.get())
+
+    def get_all_cities(self, client: WorkerNetClient) -> Dict[Union[int, str], Any]:
+        def _load():
+            try:
+                return client.Address.get_city(is_disable_hidden=1)
+            except TypeError:
+                try:
+                    return client.Address.get_city(is_disable_hidden=True)
+                except TypeError:
+                    return client.Address.get_city()
+        return self.get_all_objects("city", _load)
+
     def get_all_splitters(self, client: WorkerNetClient) -> Dict[int, Any]:
         return self.get_all_objects(TYPE_SPLITTER, lambda: client.Splitter.get())
 
@@ -541,7 +792,7 @@ class DataCache:
         return self.get_all_objects(TYPE_CWDM, lambda: client.Cwdm.get())
 
     def get_all_nodes(self, client: WorkerNetClient) -> Dict[int, Any]:
-        return self.get_all_objects("node", lambda: client.Node.get())
+        return self.get_all_objects(TYPE_NODE, lambda: client.Node.get())
 
     def get_all_fibers(self, client: WorkerNetClient) -> Dict[int, Any]:
         with self._lock:
@@ -607,13 +858,22 @@ class DataCache:
                 self._all_objects[TYPE_FIBER] = result
         return result
 
-    def get_all_devices(self, client: WorkerNetClient) -> Dict[int, Any]:
-        """Все устройства (olt/switch/onu/radio). Кладём и в typed bulk, и в device."""
+    def get_all_devices(
+        self,
+        client: WorkerNetClient,
+        *,
+        types: Optional[Sequence[str]] = None,
+    ) -> Dict[int, Any]:
+        """Устройства. По умолчанию olt/switch/radio (без bulk onu)."""
         result: Dict[int, Any] = {}
-        for dev_type in sorted(DEVICE_TYPES):
+        use_types = list(types) if types else [TYPE_OLT, TYPE_SWITCH, TYPE_RADIO]
+        for dev_type in use_types:
+            dt = str(dev_type).lower()
+            if dt not in DEVICE_TYPES:
+                continue
             devices = self.get_all_objects(
-                dev_type,
-                lambda dt=dev_type: client.Device.get_data(object_type=dt),
+                dt,
+                lambda d=dt: client.Device.get_data(object_type=d),
             )
             result.update(devices)
         # единый индекс device → id
@@ -823,6 +1083,8 @@ class DataCache:
             self._fiber_lengths.clear()
             self._geo_lengths.clear()
             self._cable_catalog = None
+            if hasattr(self, "_field_index"):
+                self._field_index.clear()
 
     def shutdown_preload(self) -> None:
         if self._preload_executor is not None:
